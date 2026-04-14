@@ -4,7 +4,7 @@
 
 Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway](https://railway.app) with a web-based admin dashboard for configuration, gateway management, and user pairing.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/ubuntu-1?referralCode=asepsp)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/hermes-agent-2?referralCode=asepsp&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 > Hermes Agent is an autonomous AI agent by [Nous Research](https://nousresearch.com/) that lives on your server, connects to your messaging channels (Telegram, Discord, Slack, etc.), and gets more capable the longer it runs.
 
