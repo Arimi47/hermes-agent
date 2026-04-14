@@ -1,8 +1,10 @@
 # Hermes Agent — Railway Template
 
+![Hermes Banner](./img/hermes-banner.png)
+
 Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway](https://railway.app) with a web-based admin dashboard for configuration, gateway management, and user pairing.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/hermes-agent-ai?referralCode=QXdhdr&utm_medium=integration&utm_source=template&utm_campaign=generic)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/ubuntu-1?referralCode=asepsp)
 
 > Hermes Agent is an autonomous AI agent by [Nous Research](https://nousresearch.com/) that lives on your server, connects to your messaging channels (Telegram, Discord, Slack, etc.), and gets more capable the longer it runs.
 
@@ -37,20 +39,30 @@ Hermes Agent interacts entirely through messaging channels — there is no chat 
 1. Open Telegram and message [@BotFather](https://t.me/BotFather)
 2. Send `/newbot`, follow the prompts, and copy the **Bot Token**
 3. Send a message to your new bot — it will appear as a pairing request in the admin dashboard
+   ![Hermes Setup](./img/pending-request.png)
 4. To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot)
 
 ### 3. Deploy to Railway
 
 1. Click the **Deploy on Railway** button above
-2. Set the `ADMIN_PASSWORD` environment variable (or a random one will be generated and printed to deploy logs)
-3. Attach a **volume** mounted at `/data` (persists config across redeploys)
-4. Open your app URL — log in with username `admin` and your password
+2. Set the `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables
+3. Open your app URL — log in with username `admin` and your password
 
 ### 4. Configure in the Admin Dashboard
 
 1. **LLM Provider** — select OpenRouter from the dropdown, paste your API key, enter the model name
 2. **Messaging Channel** — check Telegram, paste the Bot Token from BotFather
 3. Click **Save & Start** — the gateway will start and your bot goes live
+   
+    ![Hermes Setup](./img/setup.png)
+
+### 5. Check Status & Logs
+- Status cards show gateway state, uptime, and model
+  ![Hermes Status](./img/status.png)
+
+- Logs panel streams gateway stdout/stderr for debugging and monitoring
+
+  ![Hermes Logs](./img/logs.png)
 
 ### 5. Start Chatting
 
@@ -61,11 +73,11 @@ Message your Telegram bot. If you're a new user, a pairing request will appear i
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8080` | Web server port (set automatically by Railway) |
-| `ADMIN_USERNAME` | `admin` | Basic auth username |
-| `ADMIN_PASSWORD` | *(auto-generated)* | Basic auth password — if unset, a random password is printed to logs |
+| Variable         | Default    | Description         |
+| ---------------- | ---------- | ------------------- |
+| `PORT`           | `8080`     | Web server port     |
+| `ADMIN_USERNAME` | `admin`    | Basic auth username |
+| `ADMIN_PASSWORD` | `changeme` | Basic auth password |
 
 All other configuration (LLM provider, model, channels, tools) is managed through the admin dashboard.
 
