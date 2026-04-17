@@ -118,6 +118,38 @@ def read_env(path: Path) -> dict[str, str]:
     return out
 
 
+def _mfiles_mcp_block() -> str:
+    """Build the mcp_servers.mfiles YAML block when MFILES_* env vars are set.
+
+    Hermes' MCP client strips inherited env vars from stdio subprocesses
+    (see tools/mcp_tool.py::_build_safe_env), so credentials must be
+    passed via the server config's `env:` mapping. We read them from
+    os.environ here and inline them as literal YAML string values.
+
+    Returns an empty string when MFILES_SERVER_URL is not set, so
+    non-M-Files deployments of this image are unaffected.
+    """
+    url = os.environ.get("MFILES_SERVER_URL", "")
+    if not url:
+        return ""
+    # Minimal YAML-escape: single-quote the value and escape embedded quotes.
+    def q(v: str) -> str:
+        return "'" + v.replace("'", "''") + "'"
+    return f"""
+mcp_servers:
+  mfiles:
+    command: "python"
+    args: ["/opt/mfiles-mcp-server/mfiles_mcp_server.py"]
+    env:
+      MFILES_SERVER_URL: {q(url)}
+      MFILES_VAULT_GUID: {q(os.environ.get("MFILES_VAULT_GUID", ""))}
+      MFILES_USERNAME: {q(os.environ.get("MFILES_USERNAME", ""))}
+      MFILES_PASSWORD: {q(os.environ.get("MFILES_PASSWORD", ""))}
+    timeout: 120
+    connect_timeout: 60
+"""
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
     """Write a minimal config.yaml so hermes picks up the model and provider."""
     model = data.get("LLM_MODEL", "")
@@ -137,7 +169,7 @@ agent:
   max_iterations: 50
 
 data_dir: "{HERMES_HOME}"
-""")
+{_mfiles_mcp_block()}""")
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:

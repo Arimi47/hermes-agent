@@ -13,6 +13,18 @@ RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /tmp/he
 COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
+# M-Files MCP server (stdio subprocess spawned by hermes gateway)
+RUN git clone --depth 1 https://github.com/Arimi47/mfiles-mcp-server.git /opt/mfiles-mcp-server && \
+    uv pip install --system --no-cache -r /opt/mfiles-mcp-server/requirements.txt && \
+    rm -rf /opt/mfiles-mcp-server/.git
+
+# M-Files knowledge library (baked; start.sh seeds it into $HERMES_HOME/skills on boot)
+RUN git clone --depth 1 https://github.com/Arimi47/mfiles-agent-library.git /opt/mfiles-agent-library && \
+    rm -rf /opt/mfiles-agent-library/.git
+
+# SKILL.md that describes the m-files skill to the hermes skill loader
+COPY mfiles-skill/SKILL.md /opt/mfiles-agent-library/SKILL.md
+
 RUN mkdir -p /data/.hermes
 
 COPY server.py /app/server.py
