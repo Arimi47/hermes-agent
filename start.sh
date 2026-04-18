@@ -12,4 +12,13 @@ if [ -f /opt/hermes-config/config.seed.yaml ]; then
     python /app/merge_config.py /tmp/config.seed.rendered.yaml /data/.hermes/config.yaml
 fi
 
+# PA bootstrap: seed SOUL.md / USER.md / MEMORY.md only if the target file
+# is missing. Runtime edits (via the memory tool or `railway ssh`) always
+# win over the seed, matching the config.seed.yaml philosophy.
+for f in SOUL.md USER.md MEMORY.md; do
+    if [ ! -f "/data/.hermes/$f" ] && [ -f "/opt/hermes-config/$f" ]; then
+        cp "/opt/hermes-config/$f" "/data/.hermes/$f"
+    fi
+done
+
 exec python /app/server.py
