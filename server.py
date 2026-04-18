@@ -118,58 +118,36 @@ def read_env(path: Path) -> dict[str, str]:
     return out
 
 
-def _mfiles_mcp_block() -> str:
-    """Build the mcp_servers.mfiles YAML block when MFILES_* env vars are set.
-
-    Hermes' MCP client strips inherited env vars from stdio subprocesses
-    (see tools/mcp_tool.py::_build_safe_env), so credentials must be
-    passed via the server config's `env:` mapping. We read them from
-    os.environ here and inline them as literal YAML string values.
-
-    Returns an empty string when MFILES_SERVER_URL is not set, so
-    non-M-Files deployments of this image are unaffected.
-    """
-    url = os.environ.get("MFILES_SERVER_URL", "")
-    if not url:
-        return ""
-    # Minimal YAML-escape: single-quote the value and escape embedded quotes.
-    def q(v: str) -> str:
-        return "'" + v.replace("'", "''") + "'"
-    return f"""
-mcp_servers:
-  mfiles:
-    command: "python"
-    args: ["/opt/mfiles-mcp-server/mfiles_mcp_server.py"]
-    env:
-      MFILES_SERVER_URL: {q(url)}
-      MFILES_VAULT_GUID: {q(os.environ.get("MFILES_VAULT_GUID", ""))}
-      MFILES_USERNAME: {q(os.environ.get("MFILES_USERNAME", ""))}
-      MFILES_PASSWORD: {q(os.environ.get("MFILES_PASSWORD", ""))}
-    timeout: 120
-    connect_timeout: 60
-"""
-
-
 def write_config_yaml(data: dict[str, str]) -> None:
-    """Write a minimal config.yaml so hermes picks up the model and provider."""
-    model = data.get("LLM_MODEL", "")
+    """Merge the dashboard's model choice into the persisted config.yaml.
+
+    Non-dashboard fields (terminal, agent, mcp_servers, model.provider) are
+    owned by hermes-config/config.seed.yaml (merged at container boot by
+    start.sh / merge_config.py) and by `hermes model` at runtime. The dashboard
+    only owns model.default — the single dropdown the admin UI exposes. This
+    function therefore loads the current config.yaml, sets model.default if
+    the user picked one, and writes back — everything else is preserved.
+    """
+    import yaml
+
     config_path = Path(HERMES_HOME) / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(f"""\
-model:
-  default: "{model}"
-  provider: "auto"
 
-terminal:
-  backend: "local"
-  timeout: 60
-  cwd: "/tmp"
+    current: dict = {}
+    if config_path.exists():
+        try:
+            current = yaml.safe_load(config_path.read_text()) or {}
+        except yaml.YAMLError:
+            # Corrupt file: fall back to an empty dict so the merge rewrites it.
+            current = {}
 
-agent:
-  max_iterations: 50
+    model = data.get("LLM_MODEL", "")
+    if model:
+        model_block = dict(current.get("model") or {})
+        model_block["default"] = model
+        current["model"] = model_block
 
-data_dir: "{HERMES_HOME}"
-{_mfiles_mcp_block()}""")
+    config_path.write_text(yaml.safe_dump(current, sort_keys=False))
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:

@@ -1,0 +1,29 @@
+# Source of truth for non-secret, non-dashboard-owned config.
+# Merged into /data/.hermes/config.yaml on every container boot.
+# Dashboard owns model.default. Everything else here wins over the volume.
+terminal:
+  backend: "local"
+  timeout: 60
+  cwd: "/tmp"
+
+agent:
+  max_iterations: 50
+
+data_dir: "/data/.hermes"
+
+# model.provider is populated by `hermes model` on first OAuth (e.g. OpenAI Codex).
+# Do not set it here until the provider ID is confirmed with the running Hermes
+# version. Leaving it unset lets `hermes model` own it; the merge logic
+# preserves model.provider from the existing file on subsequent boots.
+
+mcp_servers:
+  mfiles:
+    command: "python"
+    args: ["/opt/mfiles-mcp-server/mfiles_mcp_server.py"]
+    env:
+      MFILES_SERVER_URL: "${MFILES_SERVER_URL}"
+      MFILES_VAULT_GUID: "${MFILES_VAULT_GUID}"
+      MFILES_USERNAME: "${MFILES_USERNAME}"
+      MFILES_PASSWORD: "${MFILES_PASSWORD}"
+    timeout: 120
+    connect_timeout: 60

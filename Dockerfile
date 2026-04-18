@@ -1,7 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git && \
+    apt-get install -y --no-install-recommends curl ca-certificates git gettext-base && \
     rm -rf /var/lib/apt/lists/*
 
 # Install hermes-agent as a package (gives us the `hermes` CLI entry point)
@@ -26,6 +26,11 @@ RUN git clone --depth 1 https://github.com/Arimi47/mfiles-agent-library.git /opt
 COPY mfiles-skill/SKILL.md /opt/mfiles-agent-library/SKILL.md
 
 RUN mkdir -p /data/.hermes
+
+# Git-tracked config seed + merge script (see hermes-config/config.seed.yaml
+# and merge_config.py for the merge semantics).
+COPY hermes-config/config.seed.yaml /opt/hermes-config/config.seed.yaml
+COPY merge_config.py /app/merge_config.py
 
 COPY server.py /app/server.py
 COPY templates/ /app/templates/
