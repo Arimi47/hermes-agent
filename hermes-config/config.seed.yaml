@@ -1,0 +1,14 @@
+# Source of truth for non-secret, non-dashboard-owned config.
+# Merged into /data/.hermes/config.yaml on every container boot by
+# start.sh + merge_config.py. Dashboard owns model.default, `hermes model`
+# (or /app/codex_login.py) owns model.provider — both are preserved
+# from the existing file across merges.
+terminal:
+  backend: "local"
+  timeout: 60
+  cwd: "/tmp"
+
+agent:
+  max_iterations: 50
+
+data_dir: "/data/.hermes"

@@ -1,7 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git && \
+    apt-get install -y --no-install-recommends curl ca-certificates git gettext-base && \
     rm -rf /var/lib/apt/lists/*
 
 # Install hermes-agent as a package (gives us the `hermes` CLI entry point)
@@ -14,6 +14,16 @@ COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
 RUN mkdir -p /data/.hermes
+
+# Git-tracked config seed + merge script. See hermes-config/config.seed.yaml
+# and merge_config.py for the merge semantics. Seed wins for terminal/agent
+# defaults; model.default and model.provider are preserved from the volume.
+COPY hermes-config/config.seed.yaml /opt/hermes-config/config.seed.yaml
+COPY merge_config.py /app/merge_config.py
+
+# Helper script that invokes the Codex OAuth flow without the curses picker.
+# Useful from `railway ssh` on Windows where arrow-key navigation is broken.
+COPY codex_login.py /app/codex_login.py
 
 COPY server.py /app/server.py
 COPY templates/ /app/templates/
