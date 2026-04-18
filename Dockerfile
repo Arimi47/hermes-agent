@@ -21,6 +21,13 @@ RUN mkdir -p /data/.hermes
 COPY hermes-config/config.seed.yaml /opt/hermes-config/config.seed.yaml
 COPY merge_config.py /app/merge_config.py
 
+# PA bootstrap: agent persona, user facts, memory scaffold. start.sh copies
+# these into $HERMES_HOME only if the target file is missing, so runtime
+# edits (via memory tools or railway ssh) always win over the seed.
+COPY hermes-config/SOUL.md /opt/hermes-config/SOUL.md
+COPY hermes-config/USER.md /opt/hermes-config/USER.md
+COPY hermes-config/MEMORY.md /opt/hermes-config/MEMORY.md
+
 # Helper script that invokes the Codex OAuth flow without the curses picker.
 # Useful from `railway ssh` on Windows where arrow-key navigation is broken.
 COPY codex_login.py /app/codex_login.py
