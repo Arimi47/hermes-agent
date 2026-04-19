@@ -36,7 +36,7 @@ function cleanMessage(m: string): string {
   return m.replace(/^Hermes:\s*/, '');
 }
 
-export default function ActivityFeed() {
+export default function ActivityFeed(_props: { inline?: boolean } = {}) {
   const [data, setData] = useState<Feed | null>(null);
   const [now, setNow] = useState(Date.now());
 
@@ -66,11 +66,8 @@ export default function ActivityFeed() {
   }, []);
 
   return (
-    <aside className="activity" key={now}>
-      <div className="activity-head">
-        <span className="activity-title">Activity</span>
-        <span className="activity-sub">vault git log</span>
-      </div>
+    <div className="activity" key={now}>
+      <div className="activity-sub">vault git log</div>
 
       {data == null && <div className="activity-empty">loading</div>}
 
@@ -102,6 +99,6 @@ export default function ActivityFeed() {
           </div>
         </div>
       ))}
-    </aside>
+    </div>
   );
 }
