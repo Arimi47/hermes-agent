@@ -125,14 +125,65 @@ def upsert_edge(tx, src_name: str, tgt_name: str) -> None:
     )
 
 
-def ingest(driver: Driver) -> tuple[int, int]:
-    """Two-pass walk: all nodes first (so labels land before any wikilink
-    would auto-create a Stub by that name), then edges. Materialises the
-    file list once so pass 2 doesn't re-read."""
+# YAML keys that never reference another entity - don't scan their values
+# for edges. Everything else is fair game (assignee, area, eigentuemer,
+# hausmeister, rolle, firma, mieter, kontakt, portfolio, ...).
+SCALAR_YAML_KEYS = {
+    'status', 'priority', 'deadline', 'date', 'type', 'id', 'mfiles_id',
+    'email', 'url', 'phone', 'path', 'folder', 'tags', 'aliases',
+    'created', 'modified', 'version', 'draft', 'cssclass', 'title',
+    'description', 'summary', 'icon', 'color',
+}
+
+
+def yaml_edges(tx, src_name: str, props: dict) -> int:
+    """Scan YAML props; for every string value that matches an existing
+    node's name, create a REFERS_TO edge tagged with the YAML key.
+
+    Uses MATCH (not MERGE) for the target so we never create stubs from
+    YAML - only materialise edges when both ends are real nodes. That
+    keeps the graph honest: a YAML value `eigentuemer: "ACME GbR"` only
+    produces an edge if we actually have a Companies/ACME GbR.md file.
+    """
+    made = 0
+    for key, raw in props.items():
+        if key in SCALAR_YAML_KEYS:
+            continue
+        values = raw if isinstance(raw, list) else [raw]
+        for v in values:
+            if not isinstance(v, str):
+                continue
+            tgt = v.strip()
+            if not tgt or tgt == src_name:
+                continue
+            res = tx.run(
+                """
+                MATCH (src {name: $src_name})
+                MATCH (tgt {name: $tgt_name})
+                WHERE id(src) <> id(tgt)
+                MERGE (src)-[r:REFERS_TO {via: $via}]->(tgt)
+                RETURN count(r) AS n
+                """,
+                src_name=src_name, tgt_name=tgt, via=key,
+            ).single()
+            if res and res.get('n', 0) > 0:
+                made += 1
+    return made
+
+
+def ingest(driver: Driver) -> tuple[int, int, int]:
+    """Three-pass walk:
+      1. Upsert all labeled nodes (so wikilink targets match existing
+         labeled nodes instead of spawning Stubs).
+      2. MENTIONS edges from [[wikilinks]] in the content.
+      3. REFERS_TO edges from YAML props whose string values match
+         existing node names (promotes "eigentuemer: X" style
+         references to graph edges).
+    """
     files = 0
-    edges = 0
-    # Pass 1: materialise file list + upsert labeled nodes.
-    parsed: list[tuple[str, str, str, dict]] = []  # (name, label, content, props)
+    mention_edges = 0
+    refer_edges = 0
+    parsed: list[tuple[str, str, str, dict]] = []
     for path in walk_vault():
         try:
             post = frontmatter.loads(path.read_text(encoding="utf-8", errors="replace"))
@@ -153,20 +204,26 @@ def ingest(driver: Driver) -> tuple[int, int]:
         for name, label, _content, props in parsed:
             session.execute_write(upsert_node, name, label, props)
             files += 1
-        # Pass 2: edges. Source node is guaranteed to exist now.
         for name, _label, content, _props in parsed:
             for target in extract_wikilinks(content):
                 session.execute_write(upsert_edge, name, target)
-                edges += 1
-    return files, edges
+                mention_edges += 1
+        # Pass 3 runs AFTER all wikilink edges so YAML-derived
+        # REFERS_TO edges see the full node set.
+        for name, _label, _content, props in parsed:
+            refer_edges += session.execute_write(yaml_edges, name, props)
+    return files, mention_edges, refer_edges
 
 
 def main() -> None:
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     try:
         driver.verify_connectivity()
-        files, edges = ingest(driver)
-        print(f"[ingest] {files} nodes, {edges} edges from {VAULT_PATH}")
+        files, mentions, refers = ingest(driver)
+        print(
+            f"[ingest] {files} nodes, {mentions} MENTIONS, "
+            f"{refers} REFERS_TO from {VAULT_PATH}"
+        )
     finally:
         driver.close()
 

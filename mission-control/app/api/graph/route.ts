@@ -17,6 +17,8 @@ type NodeRow = {
 type LinkRow = {
   source: { low: number; high: number } | number;
   target: { low: number; high: number } | number;
+  type: 'MENTIONS' | 'REFERS_TO';
+  via: string | null;
 };
 
 const toInt = (v: NodeRow['id']) =>
@@ -31,7 +33,10 @@ export async function GET() {
        RETURN id(n) AS id, n.name AS name, labels(n)[0] AS label, degree`,
     );
     const linkRows = await readQuery<LinkRow>(
-      `MATCH (a)-[:MENTIONS]->(b) RETURN id(a) AS source, id(b) AS target`,
+      `MATCH (a)-[r]->(b)
+       WHERE type(r) IN ['MENTIONS', 'REFERS_TO']
+       RETURN id(a) AS source, id(b) AS target,
+              type(r) AS type, r.via AS via`,
     );
     const nodes = nodeRows.map((n) => ({
       id: toInt(n.id),
@@ -42,6 +47,8 @@ export async function GET() {
     const links = linkRows.map((l) => ({
       source: toInt(l.source),
       target: toInt(l.target),
+      type: l.type,
+      via: l.via,
     }));
     return NextResponse.json({ nodes, links });
   } catch (e) {
