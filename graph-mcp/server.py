@@ -82,17 +82,20 @@ def recent_entities(hours: int = 48, limit: int = 20) -> dict:
     the last `hours` window link to them. Good for "what's hot right now"
     style questions.
     """
+    # date() is identity on Neo4j Date, parses ISO strings, extracts date
+    # from DateTime. Safer than datetime() casting which would reject the
+    # plain Date values written by the YAML frontmatter ingester.
     rows = _run(
         """
         MATCH (d:Daily)-[:MENTIONS]->(e)
         WHERE d.date IS NOT NULL
-          AND datetime() - duration({hours: $hours}) < datetime(d.date)
+          AND date(d.date) > date() - duration({days: $days})
         WITH e, count(DISTINCT d) AS mentions
         RETURN e.name AS name, labels(e) AS labels, mentions
         ORDER BY mentions DESC
         LIMIT $limit
         """,
-        hours=hours, limit=limit,
+        days=max(1, hours // 24), limit=limit,
     )
     return {"window_hours": hours, "entities": rows}
 
