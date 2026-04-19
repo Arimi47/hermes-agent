@@ -10,6 +10,10 @@ const ForceGraph2D = dynamic(
   () => import('react-force-graph-2d').then((m) => m.default),
   { ssr: false },
 ) as any;
+const ForceGraph3D = dynamic(
+  () => import('react-force-graph-3d').then((m) => m.default),
+  { ssr: false },
+) as any;
 
 type Node = {
   id: number;
@@ -18,9 +22,25 @@ type Node = {
   degree: number;
   x?: number;
   y?: number;
+  z?: number;
 };
-type Link = { source: number | Node; target: number | Node };
+type LinkType = 'MENTIONS' | 'REFERS_TO';
+type Link = {
+  source: number | Node;
+  target: number | Node;
+  type: LinkType;
+  via: string | null;
+};
 type GraphData = { nodes: Node[]; links: Link[] };
+
+const EDGE_COLOR_BASE: Record<LinkType, string> = {
+  MENTIONS: 'rgba(180, 180, 180, 0.08)',
+  REFERS_TO: 'rgba(163, 177, 138, 0.18)', // sage, so YAML-derived edges feel different
+};
+const EDGE_COLOR_HIT: Record<LinkType, string> = {
+  MENTIONS: 'rgba(251, 146, 60, 0.6)',
+  REFERS_TO: 'rgba(251, 146, 60, 0.5)',
+};
 
 export default function Graph() {
   const router = useRouter();
@@ -29,6 +49,7 @@ export default function Graph() {
     const v = params.get('n');
     return v ? Number.parseInt(v, 10) : null;
   }, [params]);
+  const is3D = params.get('mode') === '3d';
 
   const [data, setData] = useState<GraphData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -78,6 +99,17 @@ export default function Graph() {
     }));
   }, [data]);
 
+  const edgeCounts = useMemo(() => {
+    if (!data) return { mentions: 0, refers: 0 };
+    let m = 0;
+    let r = 0;
+    for (const l of data.links) {
+      if (l.type === 'REFERS_TO') r++;
+      else m++;
+    }
+    return { mentions: m, refers: r };
+  }, [data]);
+
   const setSelection = useCallback(
     (id: number | null) => {
       const q = new URLSearchParams(params.toString());
@@ -88,19 +120,58 @@ export default function Graph() {
     [params, router],
   );
 
-  // When selection changes, pan/zoom the graph to that node (if loaded).
+  const toggleMode = () => {
+    const q = new URLSearchParams(params.toString());
+    if (is3D) q.delete('mode');
+    else q.set('mode', '3d');
+    router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
+  };
+
   useEffect(() => {
     if (!fgRef.current || selectedId == null || !data) return;
     const target = data.nodes.find((n) => n.id === selectedId);
-    if (!target || target.x == null || target.y == null) return;
-    fgRef.current.centerAt(target.x, target.y, 600);
-    fgRef.current.zoom(2.8, 600);
-  }, [selectedId, data]);
+    if (!target) return;
+    if (is3D) {
+      if (target.x == null || target.y == null || target.z == null) return;
+      const dist = 80;
+      const r = Math.hypot(target.x, target.y, target.z) || 1;
+      fgRef.current.cameraPosition(
+        {
+          x: target.x * (1 + dist / r),
+          y: target.y * (1 + dist / r),
+          z: target.z * (1 + dist / r),
+        },
+        target,
+        800,
+      );
+    } else {
+      if (target.x == null || target.y == null) return;
+      fgRef.current.centerAt(target.x, target.y, 600);
+      fgRef.current.zoom(2.8, 600);
+    }
+  }, [selectedId, data, is3D]);
+
+  const linkColor = (l: Link) => {
+    const sid = typeof l.source === 'number' ? l.source : l.source.id;
+    const tid = typeof l.target === 'number' ? l.target : l.target.id;
+    if (selectedId != null && (sid === selectedId || tid === selectedId)) {
+      return EDGE_COLOR_HIT[l.type];
+    }
+    return EDGE_COLOR_BASE[l.type];
+  };
+
+  const linkWidth = (l: Link) => {
+    const sid = typeof l.source === 'number' ? l.source : l.source.id;
+    const tid = typeof l.target === 'number' ? l.target : l.target.id;
+    return selectedId != null && (sid === selectedId || tid === selectedId)
+      ? 1.4
+      : 0.55;
+  };
 
   return (
     <div className="graph-wrap" ref={wrapRef}>
       {err && <div className="graph-err">{err}</div>}
-      {data && size.w > 0 && (
+      {data && size.w > 0 && !is3D && (
         <ForceGraph2D
           ref={fgRef}
           graphData={data}
@@ -113,21 +184,8 @@ export default function Graph() {
           nodeColor={(n: Node) =>
             selectedId === n.id ? '#fb923c' : colorFor(n.label)
           }
-          linkColor={(l: Link) => {
-            const sid = typeof l.source === 'number' ? l.source : l.source.id;
-            const tid = typeof l.target === 'number' ? l.target : l.target.id;
-            if (selectedId != null && (sid === selectedId || tid === selectedId)) {
-              return 'rgba(251, 146, 60, 0.55)';
-            }
-            return 'rgba(180, 180, 180, 0.07)';
-          }}
-          linkWidth={(l: Link) => {
-            const sid = typeof l.source === 'number' ? l.source : l.source.id;
-            const tid = typeof l.target === 'number' ? l.target : l.target.id;
-            return selectedId != null && (sid === selectedId || tid === selectedId)
-              ? 1.4
-              : 0.6;
-          }}
+          linkColor={linkColor}
+          linkWidth={linkWidth}
           cooldownTicks={100}
           d3VelocityDecay={0.3}
           onNodeHover={(n: Node | null) => setHover(n)}
@@ -150,6 +208,29 @@ export default function Graph() {
           }}
         />
       )}
+      {data && size.w > 0 && is3D && (
+        <ForceGraph3D
+          ref={fgRef}
+          graphData={data}
+          width={size.w}
+          height={size.h}
+          backgroundColor="#0a0a0a"
+          nodeRelSize={4}
+          nodeVal={(n: Node) => 1 + Math.min(n.degree, 20) * 0.6}
+          nodeLabel={(n: Node) => `${n.name} · ${n.label}`}
+          nodeColor={(n: Node) =>
+            selectedId === n.id ? '#fb923c' : colorFor(n.label)
+          }
+          nodeOpacity={0.85}
+          linkColor={linkColor}
+          linkWidth={linkWidth}
+          linkOpacity={0.55}
+          cooldownTicks={120}
+          onNodeClick={(n: Node) => setSelection(n.id)}
+          onBackgroundClick={() => setSelection(null)}
+          onNodeHover={(n: Node | null) => setHover(n)}
+        />
+      )}
       <div className="legend">
         <div className="legend-title">Entities</div>
         {labelCounts.map(({ label, n }) => (
@@ -162,7 +243,23 @@ export default function Graph() {
             <span className="legend-n">{n}</span>
           </div>
         ))}
+        <div className="legend-divider" />
+        <div className="legend-title">Edges</div>
+        <div className="legend-row">
+          <span className="legend-edge mentions" />
+          <span className="legend-label">Mentions</span>
+          <span className="legend-n">{edgeCounts.mentions}</span>
+        </div>
+        <div className="legend-row">
+          <span className="legend-edge refers" />
+          <span className="legend-label">Refers</span>
+          <span className="legend-n">{edgeCounts.refers}</span>
+        </div>
       </div>
+      <button className="mode-toggle" onClick={toggleMode}>
+        <span className={`mode-segment${!is3D ? ' active' : ''}`}>2D</span>
+        <span className={`mode-segment${is3D ? ' active' : ''}`}>3D</span>
+      </button>
       {hover && selectedId == null && (
         <div className="hover-card">
           <div className="hover-name">{hover.name}</div>
