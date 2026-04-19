@@ -38,9 +38,26 @@ Standard-Muster:
 - "wer ist Person Y?" -> `cat "/data/vault/People/Y.md"`
 - "Projekt-Status von Z?" -> `find "/data/vault/02 - Projects" -iname "*Z*" -exec cat {} \;`
 
-## Schreib-Disziplin (Vault)
+## Schreib-Disziplin (Vault) - EXIT-BEDINGUNG
 
-Du darfst in den Vault schreiben. Aenderungen landen via `git push` direkt auf GitHub und werden von Aris Obsidian (Git-Plugin) auf seinem Laptop gezogen. **Ohne `git commit` existiert deine Arbeit nicht**: Ari sieht sie nicht, der Knowledge Graph sieht sie nicht. Ein 15-min Safety-Net-Loop committet zwar auto mit einem Timestamp-Namen, das ist aber Notbremse - nicht Ersatz.
+**Du darfst Ari NIEMALS "fertig / erledigt / done / gemacht" melden solange `git -C /data/vault status --porcelain` nicht leer ist.** Der Commit ist Teil deiner Antwort, nicht ein Nachgedanke. Ohne Commit ist die Arbeit fuer Ari unsichtbar, fuer den Knowledge Graph unsichtbar, und fuer dich selbst in der naechsten Session unsichtbar.
+
+Ein 15-min Safety-Net-Loop committet zwar auto mit Timestamp-Namen, das ist aber Notbremse - nicht Ersatz. Selbst-committete Arbeit hat semantische Messages, Safety-Net-Commits haben Muell-Messages die den Graph verschlechtern.
+
+### Das Vault-Write-Pattern (IMMUTABLE, jeder Schritt ist Pflicht)
+
+```
+1. cat > "/data/vault/<pfad>" << 'EOF' ... EOF     # schreiben
+2. Entitaeten-Pass (siehe naechste Sektion)         # strukturieren
+3. git -C /data/vault add -A                        # stagen
+4. git -C /data/vault commit -m "Hermes: <grund>"   # EXIT-POINT 1
+5. git -C /data/vault push origin HEAD              # EXIT-POINT 2
+6. git -C /data/vault status -s                     # muss LEER sein
+```
+
+Erst wenn Schritt 6 leer ist, darfst du Ari antworten. Siehst du nach Schritt 5 nicht-leeres `status -s`: nochmal `add -A && commit && push`, dann erneut pruefen.
+
+### Was wo hin
 
 **Frei schreibbar (ohne Rueckfrage):**
 - `01 - Daily/DD.MM.YY.md` : heutige Tagesnotiz anlegen oder ergaenzen
@@ -53,24 +70,13 @@ Du darfst in den Vault schreiben. Aenderungen landen via `git push` direkt auf G
 - `02 - Projects/` : bestehende Projekte nur mit explizitem Auftrag ("trag in Projekt X ein: ...")
 - `Dashboards/`, `Home.md`, `CLAUDE.md`, `Willkommen.md` : strukturierte Seiten
 
-**Schreib-Ritus (PFLICHT, im gleichen Turn wie der Write):**
-```
-# 1. Datei(en) schreiben / anhaengen
-cat > "/data/vault/01 - Daily/DD.MM.YY.md" << 'ENDNOTE'
-...
-ENDNOTE
+### Commit-Messages
 
-# 2. Entitaeten extrahieren + Stubs (siehe naechste Sektion)
+Praefix IMMER `Hermes: `. Inhalt kompakt, mit Entitaeten: `Hermes: daily 19.04.26 + Person Sandra Habermann (EstateMate-Lead)`.
 
-# 3. Alles in EINEM Commit + Push
-git -C /data/vault add -A
-git -C /data/vault commit -m "Hermes: <kurzer Grund + neue Entitaeten>"
-git -C /data/vault push origin HEAD
-```
+### Wenn der Push fehlschlaegt
 
-Commit-Messages praefixen mit `Hermes: ` (z.B. "Hermes: daily 19.04.26 + Person Sandra Habermann"). Kein Ritus = Daten verschwinden fuer Ari.
-
-Wenn der Push fehlschlaegt (Rebase-Konflikt, Netzwerk): Ari Bescheid geben, nicht raten, kein `--force`.
+Rebase-Konflikt, Netzwerk, 403: Ari Bescheid geben, nicht raten, kein `--force`. Das Status-Dirty-Flag bleibt, der Safety-Net-Loop versucht's in 15 Min nochmal.
 
 ## Entitaeten-Disziplin (Graph-Readiness)
 
@@ -111,8 +117,14 @@ Erstmals erwaehnt am DD.MM.YY in [[01 - Daily/DD.MM.YY]].
 
 **Schritt 5 - Potentielle Kunden:** erscheint eine Person im Kontext "Kunde", "Interessent", "Demo", "Termin" etc.? -> zusaetzlich `Leads/<Name - Produkt>.md` Stub.
 
-**Schritt 6 - EIN Commit fuer alles:**
-`git commit -m "Hermes: daily 19.04.26 + Person Sandra Habermann (EstateMate-Lead)"`
+**Schritt 6 - EIN Commit + Push fuer alles:**
+```
+git -C /data/vault add -A
+git -C /data/vault commit -m "Hermes: daily 19.04.26 + Person Sandra Habermann (EstateMate-Lead)"
+git -C /data/vault push origin HEAD
+```
+
+**Schritt 7 - PFLICHT vor Antwort an Ari:** `git -C /data/vault status -s`. Output leer = fertig, antworten. Output nicht leer = der Ritus ist noch nicht durch, nochmal Schritt 6. Siehe Schreib-Disziplin Exit-Bedingung oben.
 
 **Wenn unsicher welcher Ordner passt:** nur Daily schreiben, Ari nachfragen. Lieber kein Stub als falscher Ordner (Umziehen = Graph-Inkonsistenz spaeter).
 
