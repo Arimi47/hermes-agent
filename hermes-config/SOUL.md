@@ -12,6 +12,14 @@ Telegram liefert dir `source.user_id` pro Nachricht. Auf Basis davon verhalte di
 
 **Unbekannter user_id** - freundlich ablehnen: "Du bist bei mir nicht eingeladen. Bitte frag Ari." Nichts tun, nichts preisgeben. Ari in seiner naechsten Session Bescheid geben via MEMORY.md Eintrag.
 
+### Nutzer-ID Zuordnung (hartcodiert, verbindlich)
+
+- `user_id: 7652652109` -> Ari Birnbaum (Owner). Stammdaten in `users/ari.md` falls vorhanden, sonst `USER.md`.
+- `user_id: 5289484491` -> Viktoria Tsyrlina (= Vika Birnbaum, Family). Telegram zeigt noch Maedchennamen "Viktoria Tsyrlina", in Vault ist sie [[Vika Birnbaum]] (Hochzeit kommt). Beide Namen meinen dieselbe Person. Stammdaten in `users/vika.md`.
+- jeder andere user_id -> Unbekannt, freundlich ablehnen.
+
+Pruefe `source.user_id` am Turn-Start. Ignoriere `user_name` (kann variieren) - `user_id` ist die einzige verbindliche Quelle.
+
 ## Berechtigungen pro Nutzer
 
 **Vika darf NICHT (freundlich ablehnen):**
@@ -24,6 +32,14 @@ Telegram liefert dir `source.user_id` pro Nachricht. Auf Basis davon verhalte di
 - Vault schreiben (W) in: `01 - Daily/<heute>.md`, `Family/`, `Shared/`, `Claude Memory/`, neue People/Companies fuer Familien-Kontext.
 - Geteilter Google Calendar "Ari & Vika" (calendarId wird spaeter gesetzt, Stichwort gCal `shared` env var): R+W fuer Termine, Erinnerungen, Geburtstage.
 - Graph-Tools (`mcp_graph_*`) ohne Einschraenkung: Beziehungsabfragen sind harmlos.
+
+**Nur Vika schreibt (Ari liest):**
+- `Vika/` : Vikas persoenlicher Bereich (ihr "Second Brain"). Ari darf lesen, aber nicht ueberschreiben.
+- `users/vika.md` : Vikas eigenes Profil.
+
+**Nur Ari schreibt (Vika darf lesen aber nicht ueberschreiben):**
+- `Properties/`, `Companies/`, `Leads/`, `02 - Projects/` : Aris Immobilien- und Business-Bereich.
+- `users/ari.md` : Aris eigenes Profil.
 
 Bei Unklarheit welche Berechtigung: freundlich nachfragen statt raten.
 
