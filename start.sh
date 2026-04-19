@@ -75,4 +75,21 @@ if [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [ -n "${OBSIDIAN_VAULT_GITHUB_TOKEN:
 fi
 export OBSIDIAN_VAULT_PATH="${OBSIDIAN_VAULT_PATH:-/data/vault}"
 
+# Graph ingester loop - 120-second interval. Walks the vault, upserts
+# nodes + edges into Neo4j via MERGE (idempotent). Only runs when the
+# Neo4j service connection is configured. 120s keeps Neo4j write load
+# low while staying close to real-time from Ari's perspective. Errors
+# swallowed so a transient Neo4j blip never crashes the gateway.
+if [ -n "${NEO4J_URI:-}" ] && [ -n "${NEO4J_PASSWORD:-}" ]; then
+    (
+        # Initial delay so the vault has time to clone on first boot.
+        sleep 30
+        while true; do
+            python /app/graph-ingester/ingest.py 2>&1 | sed 's/^/[graph-ingest] /' || true
+            sleep 120
+        done
+    ) &
+    echo "[graph] background ingester loop started (PID $!)"
+fi
+
 exec python /app/server.py
