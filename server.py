@@ -671,11 +671,23 @@ async def api_vault_task_status(request: Request):
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 async def auto_start():
+    """Start the gateway automatically on boot if any usable credential is
+    present. The legacy check only looks at PROVIDER_KEYS (classic API keys
+    like OpenRouter / DeepSeek), which misses Codex OAuth — the actual
+    runtime credential on this deployment. So we also check for the persisted
+    OAuth token at $HERMES_HOME/auth.json, which `codex_login.py` writes
+    after the one-time device-code flow. Without this branch, every Railway
+    redeploy silently kills the bot until a manual curl."""
     data = read_env(ENV_FILE)
-    if any(data.get(k) for k in PROVIDER_KEYS):
+    has_provider_key = any(data.get(k) for k in PROVIDER_KEYS)
+    auth_path = Path(HERMES_HOME) / "auth.json"
+    has_codex_oauth = auth_path.exists() and auth_path.stat().st_size > 100
+    if has_provider_key or has_codex_oauth:
+        origin = "provider key" if has_provider_key else "Codex OAuth token"
+        print(f"[server] auto-starting gateway (source: {origin})", flush=True)
         asyncio.create_task(gw.start())
     else:
-        print("[server] No provider key found — gateway not started. Configure one in the admin UI.", flush=True)
+        print("[server] No provider key or Codex OAuth token — gateway not started. Configure one in the admin UI or run codex_login.py.", flush=True)
 
 
 @asynccontextmanager
