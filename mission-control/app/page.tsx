@@ -1,7 +1,7 @@
 import { Suspense } from 'react';
 import { readQuery } from '@/lib/neo4j';
 import Graph from '@/components/Graph';
-import ActivityFeed from '@/components/ActivityFeed';
+import LeftColumn from '@/components/LeftColumn';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -71,7 +71,9 @@ export default async function Page() {
         </div>
       </header>
       <div className="stage">
-        <ActivityFeed />
+        <Suspense>
+          <LeftColumn />
+        </Suspense>
         <Suspense>
           <Graph />
         </Suspense>
