@@ -298,13 +298,18 @@ export default function Graph() {
         return new (ShaderPass as any)(shader);
       });
 
-      // Vignette — cinematic edge darkening
+      // Vignette — cinematic edge darkening.
+      // IMPORTANT: smoothstep(edge0, edge1, x) REQUIRES edge0 < edge1.
+      // Previous version had them swapped which produced undefined (often
+      // zero) output on several drivers, which multiplied the whole image
+      // by a near-zero factor → pitch black canvas.
       safeAdd('vignette', () => {
         const shader = {
           uniforms: {
             tDiffuse: { value: null },
-            uDarkness: { value: 0.85 },
-            uOffset:   { value: 0.95 },
+            uDarkness: { value: 0.55 },   // 0 = no effect, 1 = full black edges
+            uInner:    { value: 0.25 },   // 0..uOuter: bright zone
+            uOuter:    { value: 0.85 },   // uInner..∞: fades to dark
           },
           vertexShader: `
             varying vec2 vUv;
@@ -316,14 +321,16 @@ export default function Graph() {
           fragmentShader: `
             uniform sampler2D tDiffuse;
             uniform float uDarkness;
-            uniform float uOffset;
+            uniform float uInner;
+            uniform float uOuter;
             varying vec2 vUv;
             void main() {
               vec4 c = texture2D(tDiffuse, vUv);
-              vec2 p = vUv - vec2(0.5);
-              float d = length(p);
-              float v = smoothstep(uOffset, uOffset - 0.7, d);
-              c.rgb *= mix(1.0 - uDarkness, 1.0, v);
+              float d = length(vUv - vec2(0.5));
+              // v = 0 at center, 1 at edge (valid smoothstep ordering)
+              float v = smoothstep(uInner, uOuter, d);
+              // brightness: 1.0 at center, (1.0 - uDarkness) at edge
+              c.rgb *= mix(1.0, 1.0 - uDarkness, v);
               gl_FragColor = c;
             }
           `,
