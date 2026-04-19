@@ -33,14 +33,23 @@ type Link = {
 };
 type GraphData = { nodes: Node[]; links: Link[] };
 
-const EDGE_COLOR_BASE: Record<LinkType, string> = {
+const EDGE_BASE: Record<LinkType, string> = {
   MENTIONS: 'rgba(180, 180, 180, 0.08)',
-  REFERS_TO: 'rgba(163, 177, 138, 0.18)', // sage, so YAML-derived edges feel different
+  REFERS_TO: 'rgba(163, 177, 138, 0.18)',
 };
-const EDGE_COLOR_HIT: Record<LinkType, string> = {
+const EDGE_HIT: Record<LinkType, string> = {
   MENTIONS: 'rgba(251, 146, 60, 0.6)',
   REFERS_TO: 'rgba(251, 146, 60, 0.5)',
 };
+const EDGE_DIM: Record<LinkType, string> = {
+  MENTIONS: 'rgba(180, 180, 180, 0.02)',
+  REFERS_TO: 'rgba(163, 177, 138, 0.04)',
+};
+
+const linkEnds = (l: Link): [number, number] => [
+  typeof l.source === 'number' ? l.source : l.source.id,
+  typeof l.target === 'number' ? l.target : l.target.id,
+];
 
 export default function Graph() {
   const router = useRouter();
@@ -57,6 +66,7 @@ export default function Graph() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<any>(null);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +120,20 @@ export default function Graph() {
     return { mentions: m, refers: r };
   }, [data]);
 
+  // Pre-compute the selected node's neighbour set so every frame's colour
+  // callbacks can check membership in O(1). Recomputes only when selection
+  // or data changes.
+  const neighbourSet = useMemo(() => {
+    if (selectedId == null || !data) return null;
+    const s = new Set<number>([selectedId]);
+    for (const l of data.links) {
+      const [sid, tid] = linkEnds(l);
+      if (sid === selectedId) s.add(tid);
+      if (tid === selectedId) s.add(sid);
+    }
+    return s;
+  }, [selectedId, data]);
+
   const setSelection = useCallback(
     (id: number | null) => {
       const q = new URLSearchParams(params.toString());
@@ -127,6 +151,7 @@ export default function Graph() {
     router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
   };
 
+  // Camera fly-to on selection.
   useEffect(() => {
     if (!fgRef.current || selectedId == null || !data) return;
     const target = data.nodes.find((n) => n.id === selectedId);
@@ -151,21 +176,124 @@ export default function Graph() {
     }
   }, [selectedId, data, is3D]);
 
+  // 3D-only: UnrealBloomPass + auto-rotate idle camera. Attached to the
+  // ref'd force-graph scene after the canvas mounts. Cleanup removes the
+  // pass and disables auto-rotate so a 2D<->3D toggle doesn't leak.
+  useEffect(() => {
+    if (!is3D || !fgRef.current || !data || size.w === 0) return;
+    let cancelled = false;
+    let passRef: any = null;
+    let ctlRef: any = null;
+
+    const attach = async () => {
+      const three = await import('three');
+      const { UnrealBloomPass } = await import(
+        'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+      );
+      if (cancelled || !fgRef.current) return;
+      try {
+        const composer = fgRef.current.postProcessingComposer();
+        if (composer) {
+          const pass = new UnrealBloomPass(
+            new three.Vector2(size.w, size.h),
+            1.1, // strength - keep below 1.3 or it blooms like Vegas
+            0.7, // radius
+            0.85, // threshold - only brightest pixels glow
+          );
+          composer.addPass(pass);
+          passRef = pass;
+        }
+      } catch {
+        /* bloom-optional: older GPUs may fail the shader compile */
+      }
+
+      // Auto-rotate idle camera. Slow, starts active. Any pointer/key
+      // input pauses it for 30s, then it drifts back in.
+      const controls = fgRef.current.controls();
+      if (controls) {
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.3;
+        ctlRef = controls;
+        const bump = () => {
+          if (!ctlRef) return;
+          ctlRef.autoRotate = false;
+          if (idleTimer.current) clearTimeout(idleTimer.current);
+          idleTimer.current = setTimeout(() => {
+            if (ctlRef) ctlRef.autoRotate = true;
+          }, 30_000);
+        };
+        const target = wrapRef.current;
+        target?.addEventListener('pointermove', bump);
+        target?.addEventListener('pointerdown', bump);
+        window.addEventListener('keydown', bump);
+        return () => {
+          target?.removeEventListener('pointermove', bump);
+          target?.removeEventListener('pointerdown', bump);
+          window.removeEventListener('keydown', bump);
+        };
+      }
+      return () => {};
+    };
+
+    const cleanup = attach();
+    return () => {
+      cancelled = true;
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+      if (ctlRef) ctlRef.autoRotate = false;
+      cleanup.then((fn) => fn && fn());
+      if (passRef && fgRef.current) {
+        try {
+          const composer = fgRef.current.postProcessingComposer();
+          composer?.removePass?.(passRef);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [is3D, data, size.w, size.h]);
+
   const linkColor = (l: Link) => {
-    const sid = typeof l.source === 'number' ? l.source : l.source.id;
-    const tid = typeof l.target === 'number' ? l.target : l.target.id;
-    if (selectedId != null && (sid === selectedId || tid === selectedId)) {
-      return EDGE_COLOR_HIT[l.type];
+    const [sid, tid] = linkEnds(l);
+    if (neighbourSet) {
+      if (sid === selectedId || tid === selectedId) return EDGE_HIT[l.type];
+      return EDGE_DIM[l.type];
     }
-    return EDGE_COLOR_BASE[l.type];
+    if (hover && (sid === hover.id || tid === hover.id)) {
+      return 'rgba(251, 146, 60, 0.35)';
+    }
+    return EDGE_BASE[l.type];
   };
 
   const linkWidth = (l: Link) => {
-    const sid = typeof l.source === 'number' ? l.source : l.source.id;
-    const tid = typeof l.target === 'number' ? l.target : l.target.id;
-    return selectedId != null && (sid === selectedId || tid === selectedId)
-      ? 1.4
-      : 0.55;
+    const [sid, tid] = linkEnds(l);
+    if (neighbourSet && (sid === selectedId || tid === selectedId)) return 1.4;
+    if (hover && (sid === hover.id || tid === hover.id)) return 1;
+    return 0.55;
+  };
+
+  // Directional particles only on edges touching hover OR selection.
+  // Keeps idle graph calm; hover/select makes it feel alive.
+  const particleCount = (l: Link) => {
+    const [sid, tid] = linkEnds(l);
+    const hitSelected =
+      selectedId != null && (sid === selectedId || tid === selectedId);
+    const hitHover = hover != null && (sid === hover.id || tid === hover.id);
+    return hitSelected || hitHover ? 2 : 0;
+  };
+
+  const nodeOpacity3D = (n: Node) => {
+    if (!neighbourSet) return 0.85;
+    return neighbourSet.has(n.id) ? 1 : 0.15;
+  };
+
+  const nodeColor = (n: Node) => {
+    if (selectedId === n.id) return '#fb923c';
+    if (neighbourSet && !neighbourSet.has(n.id)) {
+      // 2D canvas context reads rgba from nodeColor; dim to 0.15 alpha.
+      const base = colorFor(n.label);
+      return base.length === 7 ? base + '26' : base; // 26 hex = 0.15 alpha
+    }
+    return colorFor(n.label);
   };
 
   return (
@@ -181,11 +309,13 @@ export default function Graph() {
           nodeRelSize={3}
           nodeVal={(n: Node) => 1 + Math.min(n.degree, 20) * 0.5}
           nodeLabel={(n: Node) => `${n.name} · ${n.label}`}
-          nodeColor={(n: Node) =>
-            selectedId === n.id ? '#fb923c' : colorFor(n.label)
-          }
+          nodeColor={nodeColor}
           linkColor={linkColor}
           linkWidth={linkWidth}
+          linkDirectionalParticles={particleCount}
+          linkDirectionalParticleWidth={0.6}
+          linkDirectionalParticleSpeed={0.004}
+          linkDirectionalParticleColor={() => '#fde68a'}
           cooldownTicks={100}
           d3VelocityDecay={0.3}
           onNodeHover={(n: Node | null) => setHover(n)}
@@ -194,16 +324,18 @@ export default function Graph() {
           nodeCanvasObjectMode={() => 'after'}
           nodeCanvasObject={(n: Node, ctx: CanvasRenderingContext2D, scale: number) => {
             const isSelected = selectedId === n.id;
-            const show = isSelected || n.degree >= 6 || scale > 2.4;
+            const isNeighbour = neighbourSet && neighbourSet.has(n.id);
+            const show = isSelected || (isNeighbour && neighbourSet) || n.degree >= 6 || scale > 2.4;
             if (!show) return;
             const r = 3 + Math.min(n.degree, 20) * 0.5;
             const fontSize = Math.max(9, 11 / scale);
             ctx.font = `${isSelected ? 600 : 400} ${fontSize}px "Space Grotesk", ui-sans-serif`;
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
+            const alpha = neighbourSet && !isNeighbour ? 0.22 : 0.78;
             ctx.fillStyle = isSelected
               ? 'rgba(251, 146, 60, 1)'
-              : 'rgba(230, 230, 230, 0.72)';
+              : `rgba(230, 230, 230, ${alpha})`;
             ctx.fillText(n.name, (n.x ?? 0) + r + 3, n.y ?? 0);
           }}
         />
@@ -218,13 +350,15 @@ export default function Graph() {
           nodeRelSize={4}
           nodeVal={(n: Node) => 1 + Math.min(n.degree, 20) * 0.6}
           nodeLabel={(n: Node) => `${n.name} · ${n.label}`}
-          nodeColor={(n: Node) =>
-            selectedId === n.id ? '#fb923c' : colorFor(n.label)
-          }
-          nodeOpacity={0.85}
+          nodeColor={(n: Node) => (selectedId === n.id ? '#fb923c' : colorFor(n.label))}
+          nodeOpacity={nodeOpacity3D as any}
           linkColor={linkColor}
           linkWidth={linkWidth}
           linkOpacity={0.55}
+          linkDirectionalParticles={particleCount}
+          linkDirectionalParticleWidth={0.8}
+          linkDirectionalParticleSpeed={0.004}
+          linkDirectionalParticleColor={() => '#fde68a'}
           cooldownTicks={120}
           onNodeClick={(n: Node) => setSelection(n.id)}
           onBackgroundClick={() => setSelection(null)}
