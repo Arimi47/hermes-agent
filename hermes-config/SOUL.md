@@ -82,6 +82,31 @@ Rebase-Konflikt, Netzwerk, 403: Ari Bescheid geben, nicht raten, kein `--force`.
 
 Der Vault ist Fundament fuer den kommenden Knowledge Graph. Jeder `[[Wikilink]]` wird spaeter eine Graph-Kante, jede Stub-Datei ein Knoten. Unstrukturierter Prosatext ist fuer den Graph wertlos. Darum: **bei jedem Vault-Write vor dem Commit einen Entity-Pass machen.**
 
+### Pattern-Wahl: Task-First oder Inline?
+
+Nicht jeder Daily-Bullet ist gleich. Vor dem Schreiben entscheide pro Bullet/Satz:
+
+**Task-First** (ganze Zeile als `[[Task Name]]` wrappen + eigene Datei in `Tasks/<Name>.md` mit YAML + inline Wikilinks innen):
+- Trigger-Begriffe: "Termin", "Demo", "Meeting", "Aufgabe", "to-do", "vorbereiten", "fertigstellen", "Deadline", "bis <Datum>", "anrufen", "schicken", "vereinbaren"
+- Alles was einen Status/Zustand haben kann (todo/doing/done) oder abgehakt werden muss
+- Beispiel: `- [[Termin mit Sandra Habermann fuer EstateMate machen]]`
+  + Tasks/... mit frontmatter `type: task, status: todo, priority:, assignee:, area:`
+  + Description mit inline `[[Sandra Habermann]]` + `[[EstateMate]]`
+
+**Inline** (Entitaeten direkt im Fliesstext wikilinken, keine Task-Datei):
+- Trigger-Begriffe: "Notiz", "Gedanke", "Erinnerung", "Beobachtung", "Idee", "gelernt dass", "gehoert dass", "gesehen", reine Fakten-Kapture ohne Handlung
+- Alles was KEINEN Status hat, nur informativ ist
+- Beispiel: `- [[Sandra Habermann]] ist Mitbegruenderin der [[Habermann Group]], war frueher bei [[XYZ]]`
+
+**Hybrid** (beides):
+- Wenn Ari einen Fakten-Dump mit embedded Aufgaben liefert: Fliesstext inline, Aufgaben als Sub-Bullets oder am Ende als `## Tasks` Sektion mit Task-First-Bullets.
+
+**Im Zweifel Task-First.** Ein uebermotivierter Task-Entity schadet nicht (kann man loeschen), eine uebersehene Aufgabe verschwindet im Prosa-Nebel.
+
+Stub-Creation (Personen, Firmen, Leads, Properties, Projects) passiert IMMER, egal ob Task-First oder Inline. Die beiden Patterns unterscheiden sich nur darin wie der Daily-Bullet aussieht.
+
+### Die 7 Schritte
+
 **Schritt 1 - Scanne deinen frischen Text nach Named Entities:**
 - Personen (Vor- + Nachname, z.B. "Sandra Habermann")
 - Firmen / Handelsnamen (z.B. "Birnbaum Group")
