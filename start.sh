@@ -4,17 +4,31 @@ set -e
 mkdir -p /data/.hermes/sessions /data/.hermes/skills /data/.hermes/workspace /data/.hermes/pairing
 mkdir -p /data/wedding-invoices
 
-# Register our custom skills under the running Hermes's skill tree so they
-# show up in `hermes --skills ...` / discovery. Source of truth is
-# /opt/hermes-skills/ (built into the image); /data/.hermes/skills/ is
-# shadowed by the persistent volume, so we symlink instead of copying to
-# keep the source single.
+# Register our custom skills under the running Hermes's skill tree. Hermes's
+# skill discovery (os.walk in agent/skill_utils.py, rglob in tools/skills_tool.py)
+# does NOT follow symlinks - so symlinking /opt/hermes-skills in doesn't
+# surface the skill via skills_list / skill_view. We copy the skill as a real
+# directory instead. Idempotent: only copy if the SKILL.md is missing or
+# older than the one shipped in /opt/hermes-skills (source of truth on every
+# container build).
 if [ -d /opt/hermes-skills ]; then
     mkdir -p /data/.hermes/skills/productivity
     for skill in /opt/hermes-skills/*/; do
         [ -d "$skill" ] || continue
         name=$(basename "$skill")
-        ln -sfn "$skill" "/data/.hermes/skills/productivity/$name"
+        src_skill_md="$skill/SKILL.md"
+        dst_dir="/data/.hermes/skills/productivity/$name"
+        dst_skill_md="$dst_dir/SKILL.md"
+        # If symlink left over from older builds, remove it.
+        if [ -L "$dst_dir" ]; then
+            rm "$dst_dir"
+        fi
+        # Copy when destination is missing or older than the source SKILL.md.
+        if [ ! -f "$dst_skill_md" ] || [ "$src_skill_md" -nt "$dst_skill_md" ]; then
+            rm -rf "$dst_dir"
+            cp -r "$skill" "$dst_dir"
+            echo "[skills] seeded /data/.hermes/skills/productivity/$name from /opt/hermes-skills/"
+        fi
     done
 fi
 

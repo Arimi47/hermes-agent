@@ -26,7 +26,7 @@ See `references/sheet_schema.md` for column definitions, VAT rules, and IDs. She
 ### Step 1 - Extract raw text
 
 ```bash
-python3 /opt/hermes-skills/wedding-invoice/scripts/extract_invoice.py /path/to/file.pdf
+python3 ~/.hermes/skills/productivity/wedding-invoice/scripts/extract_invoice.py /path/to/file.pdf
 ```
 
 Output JSON: `{file, extraction_method, lang_detected, raw_text}`. `extraction_method` is `pdftotext` (clean PDF), `tesseract` (scanned/image with OCR), or `tesseract_partial` (OCR returned short text, best-effort).
@@ -66,7 +66,7 @@ Wait for an explicit OK (or corrections) before proceeding. **Never append silen
 ### Step 4 - Add on confirmation
 
 ```bash
-python3 /opt/hermes-skills/wedding-invoice/scripts/add_expense.py \
+python3 ~/.hermes/skills/productivity/wedding-invoice/scripts/add_expense.py \
   --file /path/to/file.pdf \
   --data '{"category":"...","vendor":"...","amount_ils":"...","status":"Paid","paid_by":"Ari",...}' \
   --filename "2026-02-20_Vendor_Description.pdf"

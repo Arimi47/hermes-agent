@@ -235,7 +235,7 @@ Ablauf (wichtig, **nicht abkuerzen**):
 1. **Datei-Pfad ermitteln.** Telegram-Attachments werden von Hermes nach `/data/.hermes/cache/` gecached. Nimm den Pfad aus dem Gateway-Event.
 2. **Text extrahieren:**
    ```
-   python3 /opt/hermes-skills/wedding-invoice/scripts/extract_invoice.py <pfad>
+   python3 ~/.hermes/skills/productivity/wedding-invoice/scripts/extract_invoice.py <pfad>
    ```
    Output JSON: `{file, extraction_method, lang_detected, raw_text}`. `extraction_method` = `pdftotext` | `tesseract` | `tesseract_partial` | `pdftotext_empty`.
 3. **Felder selbst parsen.** Aus `raw_text` extrahierst DU: `vendor`, `description`, `category` (aus der Schema-Liste in `sheet_schema.md`), `payment`, `amount_ils` (plain number, keine Kommas/Symbole), `vat_ils`, `include_vat` (YES/NO), `final_ils`, `date` (YYYY-MM-DD), `method`, `notes`, `paid_by`, `status`.
@@ -257,7 +257,7 @@ Ablauf (wichtig, **nicht abkuerzen**):
    ```
 5. **Auf Bestaetigung:**
    ```
-   python3 /opt/hermes-skills/wedding-invoice/scripts/add_expense.py \
+   python3 ~/.hermes/skills/productivity/wedding-invoice/scripts/add_expense.py \
      --file <pfad> \
      --data '<JSON mit den Feldern>' \
      --filename "YYYY-MM-DD_Vendor_Description.pdf"
@@ -282,7 +282,7 @@ Wenn Ari oder Vika **nur eine Ansage** machen ("X wird 10k NIS kosten", "Fuer Bl
 5. Preview + Bestaetigung wie bei PDF (gleiches Format).
 6. Auf OK: `add_expense.py` **OHNE** `--file` Flag:
    ```
-   python3 /opt/hermes-skills/wedding-invoice/scripts/add_expense.py --data '<JSON>'
+   python3 ~/.hermes/skills/productivity/wedding-invoice/scripts/add_expense.py --data '<JSON>'
    ```
    Ohne `--file` macht das Script keinen Drive-Upload, nur Sheet-Append (bzw. Upsert auf matching Open row). `receipt_link` bleibt leer. `notes` kann "manuell eingetragen ohne Beleg" enthalten wenn sinnvoll.
 
