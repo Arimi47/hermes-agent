@@ -48,7 +48,7 @@ import os
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from mcp.server.fastmcp import FastMCP
 
 from models import (
@@ -124,6 +124,104 @@ async def app_lifespan(app):
 
 # Initialize FastMCP server with proper naming
 mcp = FastMCP("mfiles_mcp", lifespan=app_lifespan)
+
+
+# =============================================================================
+# Shared document-text extraction (used by get_vorgang_documents AND by
+# the batched vorgaenge_recap_bundle tool below). Pulling it out of the
+# tool bodies means both paths extract identical content from PDFs / MSG
+# / plain text.
+# =============================================================================
+def _decode_doc_content(content: bytes, ext: str, filename: str) -> str:
+    ext = (ext or "").lower()
+    if ext == "pdf":
+        try:
+            try:
+                import PyPDF2
+                import io
+                reader = PyPDF2.PdfReader(io.BytesIO(content))
+                return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+            except ImportError:
+                try:
+                    import pdfplumber
+                    import io
+                    with pdfplumber.open(io.BytesIO(content)) as pdf:
+                        return "\n\n".join((page.extract_text() or "") for page in pdf.pages)
+                except ImportError:
+                    return "[PDF - PyPDF2/pdfplumber nicht installiert]"
+        except Exception as e:
+            return f"[Fehler bei PDF-Extraktion: {e}]"
+    if ext in {"txt", "csv", "xml", "json", "html", "htm"}:
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                return content.decode("latin-1")
+            except Exception:
+                return "[Konnte Textdatei nicht dekodieren]"
+    if ext == "msg":
+        try:
+            import extract_msg
+            import io
+            msg = extract_msg.openMsg(io.BytesIO(content))
+            parts = []
+            if msg.sender:
+                parts.append(f"Von: {msg.sender}")
+            if msg.to:
+                parts.append(f"An: {msg.to}")
+            if msg.cc:
+                parts.append(f"Cc: {msg.cc}")
+            if msg.date:
+                parts.append(f"Datum: {msg.date}")
+            if msg.subject:
+                parts.append(f"Betreff: {msg.subject}")
+            body = msg.body or ""
+            if not body and getattr(msg, "htmlBody", None):
+                import re as _re
+                body = _re.sub(r"<[^>]+>", "", msg.htmlBody or "")
+            parts.append("")
+            parts.append(body.strip())
+            return "\n".join(parts)
+        except ImportError:
+            return "[MSG - extract-msg nicht installiert]"
+        except Exception as e:
+            return f"[Fehler bei MSG-Extraktion: {e}]"
+    return f"[Binaerdatei: {filename}.{ext}, {len(content)} bytes]"
+
+
+async def _fetch_vorgang_docs_with_text(
+    client, vorgang_id: int, object_type: int, max_docs: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Load docs + extract text for one Vorgang. Parallel file downloads."""
+    try:
+        raw = await client.get_vorgang_documents(vorgang_id)
+    except Exception as e:
+        return [{"error": f"Doc-list fehlgeschlagen: {e}"}]
+    readable = [d for d in raw if d.get("extension", "").lower() in ("msg", "pdf", "eml", "txt", "html", "htm")]
+    if max_docs is not None:
+        readable = readable[:max_docs]
+    if not readable:
+        return []
+
+    async def _one(doc):
+        content, file_info = await client.download_file(
+            doc.get("object_type", object_type), doc.get("object_id", vorgang_id), doc["file_id"]
+        )
+        if content is None:
+            return {
+                "name": doc.get("name", "?"),
+                "ext": doc.get("extension", ""),
+                "error": file_info.get("error", "Download failed"),
+            }
+        text = _decode_doc_content(content, doc.get("extension", ""), doc.get("name", "doc"))
+        return {
+            "name": doc.get("name", "?"),
+            "ext": doc.get("extension", ""),
+            "size_bytes": doc.get("size_bytes", 0),
+            "text": text,
+        }
+
+    return list(await asyncio.gather(*[_one(d) for d in readable], return_exceptions=False))
 
 
 # =============================================================================
@@ -2542,6 +2640,173 @@ async def mfiles_get_view_items(params: GetViewItemsInput) -> str:
         return "\n".join(lines)
 
     return json.dumps(output, ensure_ascii=False, indent=2)
+
+
+# =============================================================================
+# =============================================================================
+# Batched bulk-recap tool. Motivation: a conversational "recap all open
+# Mietermeldungen" without batching forces Hermes to issue one MCP call
+# per Vorgang (list + details + docs). With 17 Vorgaenge that becomes
+# 30+ LLM roundtrips, and ChatGPT Plus rate-limits at ~40/3h. This tool
+# returns EVERYTHING needed for a recap (list + properties + linked
+# Liegenschaft/Einheit + Einzugsdatum + Dokumente + extracted MSG/PDF
+# text) in a SINGLE response. Hermes then spends ~2 LLM calls to format
+# a recap over 17 Vorgaenge instead of 30+.
+#
+# Mirrors the flow of mietermeldungsvorgaenge_bundle/mietermeldungen_recap.py
+# with its asyncio.gather-per-batch optimisation.
+# =============================================================================
+
+
+class VorgaengeRecapBundleInput(BaseModel):
+    """Input for mfiles_vorgaenge_recap_bundle."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    status_id: int = Field(
+        ...,
+        description=(
+            "M-Files Workflow-Status (PropertyDef 39). Haeufige Werte: "
+            "185=Mietermeldung in Pruefung, 205=Angebot zu pruefen, "
+            "186=berechtigt, 188=unberechtigt. Pflicht - ohne Filter 1000+ Vorgaenge."
+        )
+    )
+    class_id: Optional[int] = Field(
+        default=None,
+        description="Optional: nur Vorgaenge dieser Klasse (PropertyDef 100, z.B. 17=Angebot)."
+    )
+    limit: int = Field(default=50, ge=1, le=200, description="Max Vorgaenge (1-200).")
+    fetch_docs: bool = Field(
+        default=True,
+        description="Ob Dokument-Inhalte mitgeliefert werden. False ist schneller wenn nur Liste gebraucht."
+    )
+    max_docs_per_vorgang: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Obergrenze Dokumente pro Vorgang (Schutz gegen Vorgaenge mit 100+ Attachments)."
+    )
+
+
+@mcp.tool(
+    name="mfiles_vorgaenge_recap_bundle",
+    annotations={
+        "title": "Vorgaenge Bulk-Recap mit Dokumenten",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def mfiles_vorgaenge_recap_bundle(params: VorgaengeRecapBundleInput) -> str:
+    """Bulk-Recap aller Vorgaenge mit einem Status in EINEM Tool-Call.
+
+    Wann verwenden: Wenn Ari einen inhaltlichen Recap einer Gruppe Vorgaenge
+    will ("recap der offenen Mietermeldungen", "fass die Angebote zusammen").
+    Ersetzt list_vorgaenge + 17x get_vorgang_details + 17x get_vorgang_documents.
+    Spart massiv LLM-calls und faellt nicht ins ChatGPT-Plus-Rate-Limit.
+
+    Returns:
+        JSON mit fields: status_id, count, vorgaenge[] (jeweils mit title, class,
+        description, deadline, journal, assigned_to, linked_properties[],
+        linked_units[], documents[] mit extracted text).
+    """
+    client = await get_client()
+    type_id = await client._get_vorgang_type_id()
+    if type_id is None:
+        return json.dumps({"error": "Vorgang-Typ-ID nicht ermittelt"})
+
+    query_parts = [f"limit={params.limit}", f"p39={params.status_id}"]
+    if params.class_id is not None:
+        query_parts.append(f"p100={params.class_id}")
+    raw = await client.get(f"/objects/{type_id}?{'&'.join(query_parts)}")
+    items = raw.get("Items", []) if isinstance(raw, dict) else (raw or [])
+    if not items:
+        return json.dumps({
+            "status_id": params.status_id,
+            "class_id": params.class_id,
+            "count": 0,
+            "vorgaenge": [],
+        }, indent=2)
+
+    # Parallel: properties for every Vorgang in one gather.
+    ids = [it.get("ObjVer", {}).get("ID") or it.get("ID") for it in items]
+    ids = [i for i in ids if i]
+    prop_tasks = [client.get(f"/objects/{type_id}/{vid}/latest/properties") for vid in ids]
+    props_all = await asyncio.gather(*prop_tasks, return_exceptions=True)
+
+    def _parse(props, vid):
+        info = {
+            "id": vid, "title": "?", "class_name": "", "description": "",
+            "deadline": "", "journal": "", "workflow_status": "",
+            "assigned_to": [], "linked_properties": [], "linked_units": [],
+            "linked_unit_ids": [], "created_date": None, "modified_date": None,
+        }
+        for prop in (props or []):
+            pid = prop.get("PropertyDef")
+            tv = prop.get("TypedValue", {}) or {}
+            dv = tv.get("DisplayValue", "")
+            if pid == 0 and dv:
+                info["title"] = dv
+            elif pid == 100:
+                lk = tv.get("Lookup") or {}
+                info["class_name"] = lk.get("DisplayValue", dv) if lk else dv
+            elif pid == 39:
+                lk = tv.get("Lookup") or {}
+                info["workflow_status"] = lk.get("DisplayValue", dv) if lk else dv
+            elif pid == 41:
+                info["description"] = dv
+            elif pid == 42:
+                info["deadline"] = dv
+            elif pid == 44:
+                lks = tv.get("Lookups") or []
+                info["assigned_to"] = [l.get("DisplayValue", "") for l in lks if l.get("DisplayValue")] or ([dv] if dv else [])
+            elif pid == 1471:
+                info["journal"] = dv
+            for lk in (tv.get("Lookups") or []):
+                ot, dn, oid = lk.get("ObjectType"), lk.get("DisplayValue", ""), lk.get("Item")
+                if ot == 130 and dn:
+                    info["linked_properties"].append(dn)
+                elif ot == 132 and dn:
+                    info["linked_units"].append(dn)
+                    if oid:
+                        info["linked_unit_ids"].append(oid)
+            lk_s = tv.get("Lookup") or {}
+            if lk_s:
+                ot, dn, oid = lk_s.get("ObjectType"), lk_s.get("DisplayValue", ""), lk_s.get("Item")
+                if ot == 130 and dn:
+                    info["linked_properties"].append(dn)
+                elif ot == 132 and dn:
+                    info["linked_units"].append(dn)
+                    if oid:
+                        info["linked_unit_ids"].append(oid)
+        return info
+
+    vorgaenge: List[Dict[str, Any]] = []
+    for vid, props, item in zip(ids, props_all, items):
+        if isinstance(props, Exception):
+            continue
+        info = _parse(props, vid)
+        if info["title"] == "?":
+            info["title"] = item.get("Title", f"Vorgang {vid}")
+        vorgaenge.append(info)
+
+    # Parallel: docs + extracted text for every Vorgang.
+    if params.fetch_docs:
+        doc_tasks = [
+            _fetch_vorgang_docs_with_text(client, v["id"], type_id, params.max_docs_per_vorgang)
+            for v in vorgaenge
+        ]
+        docs_all = await asyncio.gather(*doc_tasks, return_exceptions=True)
+        for v, docs in zip(vorgaenge, docs_all):
+            v["documents"] = [] if isinstance(docs, Exception) else docs
+
+    payload = {
+        "status_id": params.status_id,
+        "class_id": params.class_id,
+        "count": len(vorgaenge),
+        "vorgaenge": vorgaenge,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
 # =============================================================================

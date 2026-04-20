@@ -67,6 +67,7 @@ mcp_servers:
         - mfiles_list_vorgaenge
         - mfiles_get_vorgang_details
         - mfiles_get_vorgang_documents
+        - mfiles_vorgaenge_recap_bundle
         - mfiles_download_doc
         - mfiles_set_vorgang_status
         - mfiles_set_angebot_status
