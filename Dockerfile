@@ -39,6 +39,7 @@ COPY templates/ /app/templates/
 COPY graph-ingester/ /app/graph-ingester/
 COPY graph-mcp/ /app/graph-mcp/
 COPY ms365-mcp/ /app/ms365-mcp/
+COPY mfiles-mcp/ /app/mfiles-mcp/
 
 # User-defined skills. Kept under /opt (outside the /data volume) so container
 # updates aren't shadowed by the persistent volume. SOUL.md instructs Hermes

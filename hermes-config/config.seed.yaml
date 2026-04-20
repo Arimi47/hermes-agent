@@ -44,3 +44,34 @@ mcp_servers:
     tools:
       include: [list_recent_emails, read_email, search_emails, send_email]
 
+  # M-Files (Birnbaum Group Immobilien cloudvault). Read + workflow-state-push
+  # tools for Vorgaenge (Mietermeldungen, Angebote, Sanierungen). Ported from
+  # the local mfiles-immobilien MCP (30+ tools); only the Vorgang/Property
+  # subset is exposed via the include list - the finance tools (metrics,
+  # refinancing, dscr) stay in the code but are not freigegeben until Ari
+  # needs them. Gated in SOUL to Ari only.
+  mfiles:
+    command: "python"
+    args: ["/app/mfiles-mcp/server.py"]
+    env:
+      MFILES_SERVER_URL: "${MFILES_SERVER_URL}"
+      MFILES_VAULT_GUID: "${MFILES_VAULT_GUID}"
+      MFILES_USERNAME: "${MFILES_USERNAME}"
+      MFILES_PASSWORD: "${MFILES_PASSWORD}"
+      PYTHONPATH: "/app/mfiles-mcp"
+    timeout: 45
+    tools:
+      include:
+        - mfiles_list_portfolios
+        - mfiles_get_portfolio_properties
+        - mfiles_list_vorgaenge
+        - mfiles_get_vorgang_details
+        - mfiles_get_vorgang_documents
+        - mfiles_download_doc
+        - mfiles_set_vorgang_status
+        - mfiles_set_angebot_status
+        - mfiles_set_sanierung_status
+        - mfiles_add_vorgang_comment
+        - mfiles_search
+        - mfiles_get_view_items
+
