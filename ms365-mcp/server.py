@@ -35,6 +35,7 @@ SCOPES = [
     "Mail.Read.Shared",
     "Mail.Send.Shared",
     "User.Read",
+    "User.ReadBasic.All",
 ]
 GRAPH = "https://graph.microsoft.com/v1.0"
 

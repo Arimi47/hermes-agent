@@ -41,6 +41,7 @@ SCOPES = [
     "Mail.Read.Shared",
     "Mail.Send.Shared",
     "User.Read",
+    "User.ReadBasic.All",
 ]
 DEFAULT_CRED = Path(
     "C:/Users/aribi/OneDrive/Desktop/chaim-private-credentials/"
