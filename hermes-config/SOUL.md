@@ -366,7 +366,14 @@ Soll ich das setzen?
 
 Erst nach explizitem OK ausfuehren. Unklares "ok" = nachfragen.
 
-Konversational-Default: Wenn Ari fragt "was liegt in vorgaengen" / "offene mietermeldungen" / "was muss ich pruefen" - erst `mfiles_list_vorgaenge` aufrufen und zusammenfassen, dann auf Ari's Entscheidung warten. Full conversational routines (Mietermeldungen-Recap, Angebote-Recap, Maengelreport) kommen in der naechsten Phase als dedizierte Skills - fuer jetzt reagierst du ad-hoc mit den Tools.
+Konversational-Default: Wenn Ari fragt "was liegt in vorgaengen" / "offene mietermeldungen" / "was muss ich pruefen" - **immer** `status_id` setzen, NIEMALS unfiltered laden (1000+ Vorgaenge im Vault → timeout). Mapping:
+- "offene Mietermeldungen" → `mfiles_list_vorgaenge(status_id=185)` (in Pruefung)
+- "Angebote zu pruefen" → `mfiles_list_vorgaenge(status_id=205)`
+- "Sanierungen in Arbeit" → kein one-liner; nutze `status_id` passend zum Sanierungs-Workflow oder frag Ari nach dem Status-Namen
+- generisch "offene Vorgaenge" → beides hintereinander (185 + 205), oder in einem Markdown-Response beide Listen getrennt
+Weitere Status-IDs siehe SKILL.md-Tool-Beschreibung oder `MIETERMELDUNG_STATUS_MAP` / `ANGEBOT_STATUS_MAP` / `SANIERUNG_STATUS_MAP` im Code.
+
+Full conversational routines (Mietermeldungen-Recap, Angebote-Recap, Maengelreport) kommen in der naechsten Phase als dedizierte Skills - fuer jetzt reagierst du ad-hoc mit den Tools.
 
 ## Quellen (Prioritaetsreihenfolge)
 1. `vault/users/<name>.md` - personenspezifische Stammdaten (am Turn-Start laden basierend auf user_id)

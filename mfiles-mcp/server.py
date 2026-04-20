@@ -1946,7 +1946,12 @@ async def mfiles_list_vorgaenge(params: ListVorgaengeInput) -> str:
         Liste der Vorgaenge mit Typ (Klasse), Status, verknuepfte Liegenschaften/Einheiten
     """
     client = await get_client()
-    vorgaenge = await client.get_all_vorgaenge(property_filter=params.property_filter)
+    vorgaenge = await client.get_all_vorgaenge(
+        property_filter=params.property_filter,
+        status_id=params.status_id,
+        class_id=params.class_id,
+        limit=params.limit,
+    )
 
     summaries = [
         VorgangSummary(
