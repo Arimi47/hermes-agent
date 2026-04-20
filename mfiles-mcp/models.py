@@ -1007,7 +1007,30 @@ class ListVorgaengeInput(BaseModel):
 
     property_filter: Optional[str] = Field(
         default=None,
-        description="Optional: Name der Liegenschaft zum Filtern der Vorgaenge"
+        description="Optional: Name der Liegenschaft zum Filtern der Vorgaenge (client-side match)."
+    )
+    status_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional: nur Vorgaenge mit diesem Workflow-Status (M-Files PropertyDef 39). "
+            "Haeufige Werte: 185=Mietermeldung in Pruefung, 186=berechtigt, 187=in-behebung, "
+            "188=unberechtigt, 189=erledigt; 205=Angebot zu pruefen, 206=nachverhandeln, "
+            "207=abgelehnt, 208=angenommen. URL-Filter p39=<id>, drastisch schneller als "
+            "alle 1000+ Vorgaenge zu laden. Fuer 'offene Mietermeldungen': 185."
+        )
+    )
+    class_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional: nur Vorgaenge dieser Klasse (PropertyDef 100). URL-Filter p100=<id>. "
+            "17=Angebot, weitere Klassen-IDs sind pro Vault unterschiedlich."
+        )
+    )
+    limit: int = Field(
+        default=200,
+        ge=1,
+        le=1000,
+        description="Maximale Anzahl Vorgaenge (1-1000). Default 200 reicht typisch fuer 'offene'."
     )
     response_format: ResponseFormat = Field(
         default=ResponseFormat.JSON,

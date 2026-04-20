@@ -1577,23 +1577,46 @@ class MFilesClient:
     # Vorgänge Methods
     # =========================================================================
 
-    async def get_all_vorgaenge(self, property_filter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List all Vorgänge objects from M-Files.
+    async def get_all_vorgaenge(
+        self,
+        property_filter: Optional[str] = None,
+        status_id: Optional[int] = None,
+        class_id: Optional[int] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """List Vorgaenge objects from M-Files, optionally pre-filtered server-side.
+
+        The cloudvault has ~1000 Vorgaenge; pulling the full list and fetching
+        properties per-item (even in parallel) hits 10-30s latencies due to
+        connection-pool limits. The recap scripts in
+        mietermeldungsvorgaenge_bundle solve this via URL-level filters
+        (e.g. p39=185 for "offene Mietermeldungen") - one roundtrip, under 1s.
 
         Args:
-            property_filter: Optional property name to filter Vorgänge by linked Liegenschaft.
+            property_filter: Optional Liegenschaftsname (client-side match).
+            status_id:       Optional M-Files workflow-status (PropertyDef 39).
+            class_id:        Optional Vorgang-Klasse (PropertyDef 100).
+            limit:           Cap on returned items (default 200).
         """
         type_id = await self._get_vorgang_type_id()
         if type_id is None:
             return []
 
-        cache_key = f"vorgaenge_all_{property_filter or 'none'}"
+        cache_key = f"vorgaenge_all_{property_filter or 'none'}_{status_id or 'any'}_{class_id or 'any'}_{limit}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
-        logger.info("Fetching all Vorgänge...")
-        data = await self.get(f"/objects/{type_id}")
+        query_parts = [f"limit={limit}"]
+        if status_id is not None:
+            query_parts.append(f"p39={status_id}")
+        if class_id is not None:
+            query_parts.append(f"p100={class_id}")
+        query_string = "&".join(query_parts)
+        logger.info(
+            f"Fetching Vorgaenge (filter: status_id={status_id}, class_id={class_id}, limit={limit})..."
+        )
+        data = await self.get(f"/objects/{type_id}?{query_string}")
         if not data:
             return []
 
