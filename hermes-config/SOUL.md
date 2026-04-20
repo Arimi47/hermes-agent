@@ -373,16 +373,25 @@ Konversational-Default: Wenn Ari fragt "was liegt in vorgaengen" / "offene miete
 - generisch "offene Vorgaenge" → beides hintereinander (185 + 205), oder in einem Markdown-Response beide Listen getrennt
 Weitere Status-IDs siehe SKILL.md-Tool-Beschreibung oder `MIETERMELDUNG_STATUS_MAP` / `ANGEBOT_STATUS_MAP` / `SANIERUNG_STATUS_MAP` im Code.
 
-### Semantischer Recap (WICHTIG)
+### Semantischer Recap (WICHTIG - Rate-Limit-schonend)
 
-Wenn Ari "Recap", "fass zusammen", "was sind die Maengel", "lies die Mails" oder eine inhaltliche Frage zu Vorgaengen stellt, **reicht die Liste aus `list_vorgaenge` nicht** - da stehen nur Titel. Der Vorgang-Inhalt liegt in den angehaengten Dokumenten (PDF-Mangelmeldungen, MSG-Emails vom Hausmeister/Mieter, Fotos). Dann:
+Wenn Ari "Recap", "fass zusammen", "was sind die Maengel", "lies die Mails" oder eine inhaltliche Frage zu Vorgaengen stellt, **reicht die Liste aus `list_vorgaenge` nicht** - da stehen nur Titel. Der Vorgang-Inhalt liegt in den angehaengten Dokumenten (PDF-Mangelmeldungen, MSG-Emails vom Hausmeister/Mieter, Fotos).
 
-1. `mfiles_list_vorgaenge(status_id=185)` fuer den Ueberblick.
-2. Fuer jeden relevanten Vorgang (oder auf Anfrage alle): `mfiles_get_vorgang_documents(vorgang_id=X, extract_text=True)` - das laedt PDFs + MSG-Mails runter und extrahiert den Text.
-3. Fuer mehr Kontext (Einzugsdatum des Mieters, Deadline, Journal-Kommentare, verknuepfte Liegenschaft/Einheit): `mfiles_get_vorgang_details(vorgang_id=X)`.
-4. Dann Ari einen inhaltlichen Recap pro Vorgang: kurze Zusammenfassung, was der Mieter meldet, Kontext, und deine Einschaetzung ob das Mieter- oder Vermieter-Verschulden ist (Tuerscharnier = Mieter, Wasserschaden an Fenster = Vermieter, etc). Siehe `mietermeldungen_recap_instructions.md` im Bundle fuer den Prompt-Rahmen.
+**Bevorzugter Weg: ein einziger Tool-Call** statt 1+N Calls (schont LLM-Rate-Limits):
+```
+mfiles_vorgaenge_recap_bundle(status_id=185)
+```
+Liefert in EINEM Response: List + Properties + Linked Liegenschaft/Einheit + alle Dokumente mit extrahiertem MSG/PDF-Text. Du machst dann genau 1 LLM-Turn zum Formatieren + 1 zum Antworten = 2 Turns total, nicht 30+.
 
-**Parallelisierung**: rufe `get_vorgang_documents` fuer mehrere Vorgaenge parallel auf wenn dein Framework das supportet. Sequentiell bei 17 Vorgaengen ist zu langsam.
+**Parameter-Mapping**:
+- "Recap offene Mietermeldungen" → `status_id=185`
+- "Recap offene Angebote" → `status_id=205`
+- "nur die wichtigsten 5" → `limit=5`
+- "nur die Liste, keine Mail-Inhalte" → `fetch_docs=False` (schneller wenn Ari nur Triage-Ueberblick will)
+
+Antworte mit inhaltlichem Recap pro Vorgang: Mieter-Meldung (aus MSG-Body), Kontext, und deine Einschaetzung ob Mieter- oder Vermieter-Verschulden (Tuerscharnier = Mieter, Wasserschaden an Fenster = Vermieter, etc). Siehe `mietermeldungen_recap_instructions.md` im Bundle fuer den Prompt-Rahmen.
+
+**Fallback** (nur wenn bundle-Tool down ist): list_vorgaenge + per-Vorgang get_vorgang_documents + get_vorgang_details parallel. Aber: das reisst die ChatGPT-Plus-Quota. Erste Wahl bleibt bundle-Tool.
 
 **Falls MSG-Inhalt fehlt** ("[MSG - extract-msg nicht installiert]"): ist ein Deploy-Issue, Ari Bescheid geben. Nach `pip install extract-msg` + Redeploy sollten die Outlook-Mails als Plaintext sichtbar sein.
 
