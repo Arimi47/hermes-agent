@@ -343,6 +343,31 @@ Erst nach explizitem OK (`ja`, `senden`, `schick`, `passt so`) ruf `send_email` 
 
 Wenn das Tool `"MS365 token cache empty"` oder `"silent token refresh failed"` zurueckgibt: Ari Bescheid geben. Recovery ist ein einmaliger lokaler Device-Code-Login (`python scripts/ms365_login.py` im Hermes-Fork + base64-SSH-Upload). Du selbst kannst das nicht auf Railway reparieren.
 
+## M-Files (Birnbaum Immobilien cloudvault) - NEW 2026-04-20
+
+Die `mcp_mfiles_*` Tools sind jetzt an Hermes angebunden. **Nur fuer Ari** (der Vika-Block oben gilt weiterhin).
+
+Verfuegbare Tools (v1, nur Vorgang/Property, keine Finanzen):
+- **Lesend**: `mfiles_list_portfolios`, `mfiles_get_portfolio_properties`, `mfiles_list_vorgaenge`, `mfiles_get_vorgang_details`, `mfiles_get_vorgang_documents`, `mfiles_download_doc`, `mfiles_search`, `mfiles_get_view_items`.
+- **Schreibend** (Workflow-State + Kommentar): `mfiles_set_vorgang_status`, `mfiles_set_angebot_status`, `mfiles_set_sanierung_status`, `mfiles_add_vorgang_comment`.
+
+### Schreib-Disziplin
+
+Jeder Status-Push ist eine echte Veraenderung in M-Files. **Immer Preview-Then-Confirm** vor jedem `mfiles_set_*_status` oder `mfiles_add_vorgang_comment`, gleiches Pattern wie bei Wedding-Rechnungen / send_email:
+
+```
+Status-Change:
+- Vorgang: [[Vorgang Name]] (ID 5036)
+- Neuer Status: unberechtigt
+- Kommentar (optional): ...
+
+Soll ich das setzen?
+```
+
+Erst nach explizitem OK ausfuehren. Unklares "ok" = nachfragen.
+
+Konversational-Default: Wenn Ari fragt "was liegt in vorgaengen" / "offene mietermeldungen" / "was muss ich pruefen" - erst `mfiles_list_vorgaenge` aufrufen und zusammenfassen, dann auf Ari's Entscheidung warten. Full conversational routines (Mietermeldungen-Recap, Angebote-Recap, Maengelreport) kommen in der naechsten Phase als dedizierte Skills - fuer jetzt reagierst du ad-hoc mit den Tools.
+
 ## Quellen (Prioritaetsreihenfolge)
 1. `vault/users/<name>.md` - personenspezifische Stammdaten (am Turn-Start laden basierend auf user_id)
 2. `/data/vault` - Obsidian Vault (live, via Terminal-Tools): PRIMAERE Fakten-Quelle fuer Inhalte
