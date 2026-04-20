@@ -51,9 +51,12 @@ _AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 
 mcp = FastMCP("hermes-ms365")
 
-# Lazy-initialised per-mailbox clients. Lazy so a missing cache for one
-# mailbox doesn't prevent the other from working.
-_clients: dict[str, tuple[Any, SerializableTokenCache, Path]] = {}
+# Lazy-initialised per-mailbox clients. Tuple: (app, cache, path, mtime).
+# Lazy so a missing cache for one mailbox doesn't prevent the other from
+# working. mtime is stored so that external token-file rewrites (via
+# base64-SSH after a fresh login) are picked up without requiring a
+# gateway restart.
+_clients: dict[str, tuple[Any, SerializableTokenCache, Path, float]] = {}
 
 
 def _resolve_mailbox(mailbox: str | None) -> str:
@@ -70,10 +73,21 @@ def _resolve_mailbox(mailbox: str | None) -> str:
     return key
 
 
+def _file_mtime(path: Path) -> float:
+    return path.stat().st_mtime if path.exists() else 0.0
+
+
 def _client_for(mailbox: str) -> tuple[Any, SerializableTokenCache, Path]:
-    if mailbox in _clients:
-        return _clients[mailbox]
     path = MAILBOXES[mailbox]
+    current_mtime = _file_mtime(path)
+    if mailbox in _clients:
+        app, cache, stored_path, stored_mtime = _clients[mailbox]
+        # Cache is fresh if the file hasn't changed since we last read
+        # it. This matters when the token file is replaced externally
+        # (e.g. base64-SSH after a re-login) - without the mtime check
+        # we'd keep using the stale in-memory cache until restart.
+        if current_mtime <= stored_mtime:
+            return app, cache, stored_path
     cache = SerializableTokenCache()
     if path.exists():
         cache.deserialize(path.read_text(encoding="utf-8"))
@@ -90,8 +104,8 @@ def _client_for(mailbox: str) -> tuple[Any, SerializableTokenCache, Path]:
             authority=_AUTHORITY,
             token_cache=cache,
         )
-    _clients[mailbox] = (app, cache, path)
-    return _clients[mailbox]
+    _clients[mailbox] = (app, cache, path, current_mtime)
+    return app, cache, path
 
 
 def _access_token(mailbox: str) -> str:
@@ -113,6 +127,9 @@ def _access_token(mailbox: str) -> str:
     if cache.has_state_changed:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(cache.serialize(), encoding="utf-8")
+        # Our own write bumps mtime - record it so the next _client_for
+        # doesn't think the file was externally touched and rebuild.
+        _clients[mailbox] = (app, cache, path, _file_mtime(path))
     return result["access_token"]
 
 
