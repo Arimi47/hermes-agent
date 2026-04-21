@@ -93,3 +93,11 @@ mcp_servers:
         - mfiles_search
         - mfiles_get_view_items
 
+# Disable upstream skills that duplicate or compete with our first-class
+# integrations. Himalaya is a terminal IMAP client; we route all mail
+# through the MS365 MCP (Graph) and never set up IMAP credentials, so its
+# skill entry just burns 2-3 extra LLM turns per email query.
+skills:
+  disabled:
+    - himalaya
+
