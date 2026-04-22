@@ -1,3 +1,8 @@
+---
+name: estatemate-crm
+description: "Pflegt das EstateMate Sales-CRM in Twenty (self-hosted auf Railway). Nutze diesen Skill IMMER fuer EstateMate-Vertriebsthemen: Pipeline-Status, Deals, Leads, Opportunities, Stages (Gespraech/Demo/Pilot/Angebot/Won/Lost), Referrer-Tracking, Kunden-Kontakte und Activities. Scripts machen Twenty-REST-API-Calls (search, log_activity, update_stage, create_lead, create_contact, add_note_task, pipeline_status). Triggers: EstateMate, Pipeline, Deal, Lead, Referrer, Opportunity, Won, Lost, Stage, Sales, CRM, Twenty, Demo gezeigt, Call gehabt, Meeting mit Kunde, pipeline status, wie sieht die pipeline aus, aktive deals, neue leads, wer hat wen gebracht, onboarding, stage wechseln, log activity, log call, log meeting, BIDDEX, Caleus, Sandra Habermann, Jachimowicz, Flo Muenster, Rackham Schroeder, Dr. Franck, Franck Satzl, Herr Rist, Patrick Reich, Lukas Jackl, Engel & Voelkers."
+---
+
 # EstateMate CRM Skill
 
 ## Overview
