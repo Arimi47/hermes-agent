@@ -45,10 +45,10 @@ Enum-Werte siehe `references/enums.md`.
 Vor jedem Write: erst den relevanten Record finden (by name / substring). Nie raten.
 
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/search.py --type person --query "Rackham"
-python3 ~/.hermes/skills/estatemate-crm/scripts/search.py --type company --query "Caleus"
-python3 ~/.hermes/skills/estatemate-crm/scripts/search.py --type deal --query "Onboarding"
-python3 ~/.hermes/skills/estatemate-crm/scripts/search.py --type lead --query "BIDDEX"
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/search.py --type person --query "Rackham"
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/search.py --type company --query "Caleus"
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/search.py --type deal --query "Onboarding"
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/search.py --type lead --query "BIDDEX"
 ```
 
 Gibt JSON mit `id`, Name, wichtigste Felder und Relations zurück. Ambiguität (mehrere Matches): User nachfragen, nie raten.
@@ -57,7 +57,7 @@ Gibt JSON mit `id`, Name, wichtigste Felder und Relations zurück. Ambiguität (
 
 **Activity loggen (Deal oder Lead):**
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/log_activity.py \
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/log_activity.py \
   --parent-type deal --parent-id <uuid> \
   --typ TYPE_CALL --richtung DIR_OUTBOUND \
   --datum 2026-04-22T14:30:00Z \
@@ -70,7 +70,7 @@ python3 ~/.hermes/skills/estatemate-crm/scripts/log_activity.py \
 
 **Stage ändern (Deal oder Lead), setzt stageSeit automatisch:**
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/update_stage.py \
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/update_stage.py \
   --type deal --id <uuid> --stage STAGE_ANGEBOT
 ```
 
@@ -79,7 +79,7 @@ Lead-Stages: STAGE_NEU, STAGE_KONTAKTIERT, STAGE_GEANTWORTET, STAGE_NURTURING, S
 
 **Neuen Lead anlegen (mit Referrer):**
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/create_lead.py \
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/create_lead.py \
   --name "KGAL Portfolio" --company-text "KGAL" \
   --source SRC_REFERRAL --referrer-id <person-id-of-referrer> \
   --icp-quick-fit SCORE_4 \
@@ -88,7 +88,7 @@ python3 ~/.hermes/skills/estatemate-crm/scripts/create_lead.py \
 
 **Neuen Contact anlegen:**
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/create_contact.py \
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/create_contact.py \
   --first "Klara" --last "Nowak" \
   --company-id <uuid> \
   --titel "Head of Real Estate" --buying-role ROLE_CHAMPION \
@@ -97,7 +97,7 @@ python3 ~/.hermes/skills/estatemate-crm/scripts/create_contact.py \
 
 **Note oder Task hinzufügen:**
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/add_note_task.py \
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/add_note_task.py \
   --kind note --attach-to-type person --attach-to-id <uuid> \
   --title "Referral über LinkedIn kam durch Dr. Franck" \
   --body "Dr. Franck hat uns heute Abend per LinkedIn vorgestellt..."
@@ -105,7 +105,7 @@ python3 ~/.hermes/skills/estatemate-crm/scripts/add_note_task.py \
 
 Oder Task mit Fälligkeit:
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/add_note_task.py \
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/add_note_task.py \
   --kind task --attach-to-type deal --attach-to-id <uuid> \
   --title "Scope-Entwurf an Patrick senden" --due 2026-05-01
 ```
@@ -115,7 +115,7 @@ python3 ~/.hermes/skills/estatemate-crm/scripts/add_note_task.py \
 Für "was liegt an?", "wer ist dran?", "wie steht's":
 
 ```bash
-python3 ~/.hermes/skills/estatemate-crm/scripts/pipeline_status.py
+python3 ~/.hermes/skills/productivity/estatemate-crm/scripts/pipeline_status.py
 ```
 
 Gibt Summary: aktive Deals (Stage + Age), offene Leads, Next Actions bis heute, stille Referrer (>60 Tage).
