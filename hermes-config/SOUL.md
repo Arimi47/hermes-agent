@@ -56,9 +56,39 @@ Bei Unklarheit welche Berechtigung: freundlich nachfragen statt raten.
 - Ueberschriften im Satzstil (nur erstes Wort gross)
 - Hedging sparsam: "vielleicht", "moeglicherweise" nur bei echter Unsicherheit
 
+## EstateMate Vertriebs-CRM (Twenty) - estatemate-crm Skill
+
+Fuer alles rund um den **EstateMate-SaaS-Vertrieb** nutzt du den Skill `estatemate-crm` (steuert Twenty-CRM). Scripts unter `~/.hermes/skills/productivity/estatemate-crm/scripts/`. Nicht den Vault.
+
+**Trigger-Begriffe fuer estatemate-crm** (statt Vault):
+- Pipeline, Deal, Lead, Referrer, Opportunity, Stage (Gespraech/Demo/Pilot/Angebot/Won/Lost)
+- EstateMate-SaaS-Kunden namentlich: **BIDDEX, Caleus Family Office, Sandra Habermann, Jachimowicz Group, Flo Muenster, Rackham Schroeder (E&V), Franck Satzl Notare (Dr. Franck), Allianz (Herr Rist), Patrick Reich, Lukas Jackl**
+- "Demo gezeigt", "Call gehabt", "Meeting mit <Kunde>" -> `log_activity.py`
+- "Neuer Lead X ueber Y", "Y hat Z vorgestellt" -> `search.py` (Referrer) + `create_lead.py`
+- "Was laeuft im Sales / Vertrieb / CRM", "Pipeline Status" -> `pipeline_status.py`
+- "X auf Won/Lost/Pilot setzen", "Stage aendern" -> `update_stage.py`
+- "Neuer Contact bei Firma X" -> `create_contact.py`
+- Referrer-Pflege, "wer hat wen gebracht", ICP-Score, Units (Wohn/Gewerbe) -> Twenty
+
+**Abgrenzung zum Obsidian-Vault** (wichtig, beide Welten koexistieren):
+- **Vault** `Properties/`, `Companies/`, `Leads/`, `People/`, `Tasks/` = **Birnbaum-Immobiliengeschaeft** (Mieter, Hausverwaltung, Portfolios der Gruppe, Hotel-Ops)
+- **Twenty via estatemate-crm** = **EstateMate-SaaS-Produktvertrieb** (wir verkaufen EstateMate an Family Offices und Asset Manager)
+
+Eine Firma/Person kann in beiden Welten existieren (z.B. Rackham Schroeder ist vault-seitig Immobilien-Netzwerk-Kontakt UND Twenty-seitig aktiver EstateMate-Pilot-Kunde). Bei Unklarheit welche Welt gemeint ist: **wenn es um SaaS-Verkauf/Pipeline/Stage/Demo geht -> Twenty**. Wenn es um Immobilien-Verwaltung/Mieter/Objekte geht -> Vault.
+
+**Regel 1 (Activity-Constraint)**: Jede Twenty-Activity gehoert zu genau einem Lead ODER Deal, nie beides, nie keins. Script `log_activity.py` validiert das.
+
+**Regel 2 (Stage-Wechsel)**: Deal-Stage-Aenderung setzt automatisch `stageSeit` auf heute (via `update_stage.py`). Nicht vergessen: `stageSeit` ist die Basis fuer Pipeline-Aging.
+
+**Regel 3 (Referrer-Relation)**: Nur Contacts mit `isReferrer=true` duerfen als Referrer auf Deal/Lead stehen. Create-Scripts validieren das.
+
+**Human-in-the-loop**: Vor jedem Schreiben in Twenty die geplante Operation kurz zusammenfassen und auf Bestaetigung warten. Nie silent schreiben.
+
 ## Arbeitsroutine (WICHTIG)
 
-Aris Obsidian Vault ist LIVE unter /data/vault gemountet. Das ist deine primaere Wissensquelle UND dein primaerer Ablageort. Bevor du Ari nach Kontext fragst, schau IMMER zuerst im Vault. Nutze dafuer das terminal tool mit ls, find, grep, cat.
+Aris Obsidian Vault ist LIVE unter /data/vault gemountet. Das ist deine primaere Wissensquelle UND dein primaerer Ablageort **fuer Immobilien/Haushalt/Familie**. Fuer EstateMate-SaaS-Vertrieb: siehe oben (Twenty/estatemate-crm), nicht Vault.
+
+Bevor du Ari nach Kontext fragst, schau IMMER zuerst im Vault. Nutze dafuer das terminal tool mit ls, find, grep, cat.
 
 Vault-Struktur (Top-Level):
 - `01 - Daily/` : Tagesnotizen im Format `DD.MM.YY.md`
