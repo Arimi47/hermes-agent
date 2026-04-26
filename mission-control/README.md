@@ -21,7 +21,7 @@ NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD=... npm run dev
 ## Phased buildout
 
 - Slice A: stats panel (node/edge counts, label breakdown) - this PR.
-- Slice B: force-directed graph (`react-force-graph-2d`) of whole vault.
+- Slice B: force-directed graph (`reagraph`, 2D + 3D layouts) of whole vault.
 - Slice C: click node → detail panel (props + neighbours).
 - Slice D: activity feed tailing obsidian-vault-sync git log.
 - Slice E: task board reading Tasks/ folder + YAML frontmatter.

@@ -2,18 +2,19 @@
 
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import * as THREE from 'three';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { colorFor, LABEL_COLOR, LABEL_ORDER } from '@/lib/labels';
 import { communityColor, computeCommunities, COMMUNITY_COLORS } from '@/lib/clustering';
 import DetailPanel from './DetailPanel';
 
-const ForceGraph2D = dynamic(
-  () => import('react-force-graph-2d').then((m) => m.default),
-  { ssr: false },
-) as any;
-const ForceGraph3D = dynamic(
-  () => import('react-force-graph-3d').then((m) => m.default),
+// Reagraph is a WebGL graph renderer with a single GraphCanvas component
+// that supports both 2D and 3D layouts via the layoutType prop. We dynamic-
+// import it (ssr: false) because it touches window/document at module load.
+// Replaced react-force-graph-2d/3d on 2026-04-26: the 3D variant suffered
+// from WebGL context-loss black-canvas crashes on this user's hardware
+// (vasturiano/3d-force-graph#194, react-three-fiber#3093).
+const GraphCanvas = dynamic(
+  () => import('reagraph').then((m) => m.GraphCanvas),
   { ssr: false },
 ) as any;
 
@@ -22,9 +23,6 @@ type Node = {
   name: string;
   label: string;
   degree: number;
-  x?: number;
-  y?: number;
-  z?: number;
 };
 type LinkType = 'MENTIONS' | 'REFERS_TO';
 type Link = {
@@ -35,23 +33,75 @@ type Link = {
 };
 type GraphData = { nodes: Node[]; links: Link[] };
 
-const EDGE_BASE: Record<LinkType, string> = {
-  MENTIONS: 'rgba(180, 180, 180, 0.08)',
-  REFERS_TO: 'rgba(163, 177, 138, 0.18)',
+// Reagraph node + edge shapes. id MUST be a string. We carry the original
+// numeric id in `data.numericId` so click handlers can route back.
+type RGNode = {
+  id: string;
+  label: string;
+  fill: string;
+  size: number;
+  data: { label: string; degree: number; numericId: number };
 };
-const EDGE_HIT: Record<LinkType, string> = {
-  MENTIONS: 'rgba(251, 146, 60, 0.6)',
-  REFERS_TO: 'rgba(251, 146, 60, 0.5)',
+type RGEdge = {
+  id: string;
+  source: string;
+  target: string;
+  fill: string;
+  size?: number;
 };
-const EDGE_DIM: Record<LinkType, string> = {
-  MENTIONS: 'rgba(180, 180, 180, 0.02)',
-  REFERS_TO: 'rgba(163, 177, 138, 0.04)',
+
+const EDGE_FILL: Record<LinkType, string> = {
+  MENTIONS: 'rgba(180, 180, 180, 0.55)',
+  REFERS_TO: 'rgba(163, 177, 138, 0.7)',
 };
 
 const linkEnds = (l: Link): [number, number] => [
   typeof l.source === 'number' ? l.source : l.source.id,
   typeof l.target === 'number' ? l.target : l.target.id,
 ];
+
+// Theme tuned to match the existing Mission Control palette: warm dark
+// canvas, label-color-as-fill so per-node fills survive, dimming via
+// inactiveOpacity for the "select X, dim everything else" UX.
+const HERMES_THEME = {
+  canvas: {
+    background: '#0a0a0a',
+    fog: '#0a0a0a',
+  },
+  node: {
+    fill: '#7A8C9E',
+    activeFill: '#fb923c',
+    opacity: 0.9,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.18,
+    label: {
+      color: '#e6e6e6',
+      stroke: '#0a0a0a',
+      activeColor: '#fb923c',
+    },
+  },
+  edge: {
+    fill: 'rgba(180,180,180,0.35)',
+    activeFill: '#fb923c',
+    opacity: 0.55,
+    selectedOpacity: 0.9,
+    inactiveOpacity: 0.06,
+    label: {
+      color: '#888',
+      stroke: '#0a0a0a',
+      activeColor: '#fb923c',
+      fontSize: 6,
+    },
+  },
+  ring: { fill: '#54616D', activeFill: '#fb923c' },
+  arrow: { fill: '#474B56', activeFill: '#fb923c' },
+  lasso: { border: '1px solid #fb923c', background: 'rgba(251,146,60,0.08)' },
+  cluster: {
+    stroke: '#474B56',
+    opacity: 1,
+    label: { color: '#ACBAC7', stroke: '#0a0a0a' },
+  },
+};
 
 export default function Graph() {
   const router = useRouter();
@@ -67,9 +117,6 @@ export default function Graph() {
   const [err, setErr] = useState<string | null>(null);
   const [hover, setHover] = useState<Node | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const fgRef = useRef<any>(null);
-  const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,17 +138,6 @@ export default function Graph() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!wrapRef.current) return;
-    const el = wrapRef.current;
-    const ro = new ResizeObserver(() => {
-      setSize({ w: el.clientWidth, h: el.clientHeight });
-    });
-    ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
-    return () => ro.disconnect();
-  }, []);
-
   const labelCounts = useMemo(() => {
     if (!data) return [] as { label: string; n: number }[];
     const m = new Map<string, number>();
@@ -112,14 +148,11 @@ export default function Graph() {
     }));
   }, [data]);
 
-  // Louvain communities keyed by node id. Recomputed only when the
-  // graph topology changes.
   const communities = useMemo(() => {
     if (!data) return null;
     return computeCommunities(data.nodes, data.links);
   }, [data]);
 
-  // Community sizes in rank order for the legend.
   const communityStats = useMemo(() => {
     if (!communities) return [] as { idx: number; n: number }[];
     const sizes = new Map<number, number>();
@@ -141,29 +174,60 @@ export default function Graph() {
     return { mentions: m, refers: r };
   }, [data]);
 
-  // Pre-compute the selected node's neighbour set so every frame's colour
-  // callbacks can check membership in O(1). Recomputes only when selection
-  // or data changes.
-  const neighbourSet = useMemo(() => {
-    if (selectedId == null || !data) return null;
+  // Selected node + 1-hop neighbour set, both as strings for Reagraph.
+  // Used as `actives` so neighbours stay bright while the rest dims.
+  const actives = useMemo(() => {
+    if (selectedId == null || !data) return [] as string[];
     const s = new Set<number>([selectedId]);
     for (const l of data.links) {
       const [sid, tid] = linkEnds(l);
       if (sid === selectedId) s.add(tid);
       if (tid === selectedId) s.add(sid);
     }
-    return s;
+    return Array.from(s).map(String);
   }, [selectedId, data]);
 
-  const setSelection = useCallback(
-    (id: number | null) => {
-      const q = new URLSearchParams(params.toString());
-      if (id == null) q.delete('n');
-      else q.set('n', String(id));
-      router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
-    },
-    [params, router],
+  const selections = useMemo(
+    () => (selectedId != null ? [String(selectedId)] : []),
+    [selectedId],
   );
+
+  const rgNodes: RGNode[] = useMemo(() => {
+    if (!data) return [];
+    return data.nodes.map((n) => ({
+      id: String(n.id),
+      label: n.name,
+      size:
+        n.degree >= 25 ? 14 :
+        n.degree >= 12 ? 10 :
+        n.degree >= 6 ? 8 : 6,
+      fill:
+        colorMode === 'community'
+          ? communityColor(communities?.get(n.id))
+          : colorFor(n.label),
+      data: { label: n.label, degree: n.degree, numericId: n.id },
+    }));
+  }, [data, colorMode, communities]);
+
+  const rgEdges: RGEdge[] = useMemo(() => {
+    if (!data) return [];
+    return data.links.map((l, i) => {
+      const [sid, tid] = linkEnds(l);
+      return {
+        id: `e-${i}-${sid}-${tid}-${l.type}`,
+        source: String(sid),
+        target: String(tid),
+        fill: EDGE_FILL[l.type],
+      };
+    });
+  }, [data]);
+
+  const setSelection = (id: number | null) => {
+    const q = new URLSearchParams(params.toString());
+    if (id == null) q.delete('n');
+    else q.set('n', String(id));
+    router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
+  };
 
   const toggleMode = () => {
     const q = new URLSearchParams(params.toString());
@@ -179,373 +243,40 @@ export default function Graph() {
     router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
   };
 
-  // Camera fly-to on selection.
-  useEffect(() => {
-    if (!fgRef.current || selectedId == null || !data) return;
-    const target = data.nodes.find((n) => n.id === selectedId);
-    if (!target) return;
-    if (is3D) {
-      if (target.x == null || target.y == null || target.z == null) return;
-      const dist = 80;
-      const r = Math.hypot(target.x, target.y, target.z) || 1;
-      fgRef.current.cameraPosition(
-        {
-          x: target.x * (1 + dist / r),
-          y: target.y * (1 + dist / r),
-          z: target.z * (1 + dist / r),
-        },
-        target,
-        800,
-      );
-    } else {
-      if (target.x == null || target.y == null) return;
-      fgRef.current.centerAt(target.x, target.y, 600);
-      fgRef.current.zoom(2.8, 600);
-    }
-  }, [selectedId, data, is3D]);
-
-  // 3D-only cinematic stack:
-  //  - UnrealBloomPass (core glow, existing)
-  //  - FilmPass (grain + faint scanline, analog feel)
-  //  - Custom ChromaticAberrationShader (tiny color fringe at screen edges)
-  //  - Custom VignetteShader (cinematic edge darkening)
-  //  - Auto-rotate controls with "breathing" idle motion on top
-  //  - Idle pause: any pointer/key input pauses auto-rotate + breathing for 30s
-  // All passes are wrapped in try/catch — a shader compile failure on older
-  // GPUs silently skips that one effect without breaking the whole graph.
-  useEffect(() => {
-    if (!is3D || !fgRef.current || !data || size.w === 0) return;
-    let cancelled = false;
-    const addedPasses: any[] = [];
-    let ctlRef: any = null;
-    let breathRafId: number | null = null;
-    let userInteracted = false;
-    let breathPauseUntil = 0;
-
-    const attach = async () => {
-      const three = await import('three');
-      const { UnrealBloomPass } = await import(
-        'three/examples/jsm/postprocessing/UnrealBloomPass.js'
-      );
-      const { FilmPass } = await import(
-        'three/examples/jsm/postprocessing/FilmPass.js'
-      );
-      const { ShaderPass } = await import(
-        'three/examples/jsm/postprocessing/ShaderPass.js'
-      );
-      if (cancelled || !fgRef.current) return () => {};
-      const composer = fgRef.current.postProcessingComposer?.();
-      if (!composer) return () => {};
-
-      const safeAdd = (label: string, fn: () => any) => {
-        try {
-          const pass = fn();
-          if (pass) {
-            composer.addPass(pass);
-            addedPasses.push(pass);
-          }
-        } catch (e) {
-          console.warn(`[graph fx] ${label} skipped:`, e);
-        }
-      };
-
-      safeAdd('bloom', () => new UnrealBloomPass(
-        new three.Vector2(size.w, size.h),
-        1.15, 0.72, 0.82,
-      ));
-
-      // Film grain + very faint scanlines. The constructor signature varies
-      // between three versions; pass intensity as first arg, rest default.
-      safeAdd('film', () => {
-        const fp: any = new (FilmPass as any)(
-          0.22,  // noise intensity
-          0.06,  // scanline intensity (very subtle)
-          2048,  // scanline count
-          false, // grayscale
-        );
-        return fp;
-      });
-
-      // Chromatic aberration — cheap GLSL, subtle color fringe near the edges
-      safeAdd('chromaticAberration', () => {
-        const shader = {
-          uniforms: {
-            tDiffuse: { value: null },
-            uOffset: { value: 0.0022 },
-          },
-          vertexShader: `
-            varying vec2 vUv;
-            void main() {
-              vUv = uv;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform sampler2D tDiffuse;
-            uniform float uOffset;
-            varying vec2 vUv;
-            void main() {
-              vec2 dir = vUv - vec2(0.5);
-              float falloff = smoothstep(0.2, 0.9, length(dir));
-              float off = uOffset * falloff;
-              float r = texture2D(tDiffuse, vUv + dir * off).r;
-              float g = texture2D(tDiffuse, vUv).g;
-              float b = texture2D(tDiffuse, vUv - dir * off).b;
-              gl_FragColor = vec4(r, g, b, 1.0);
-            }
-          `,
-        };
-        return new (ShaderPass as any)(shader);
-      });
-
-      // Vignette — cinematic edge darkening.
-      // IMPORTANT: smoothstep(edge0, edge1, x) REQUIRES edge0 < edge1.
-      // Previous version had them swapped which produced undefined (often
-      // zero) output on several drivers, which multiplied the whole image
-      // by a near-zero factor → pitch black canvas.
-      safeAdd('vignette', () => {
-        const shader = {
-          uniforms: {
-            tDiffuse: { value: null },
-            uDarkness: { value: 0.55 },   // 0 = no effect, 1 = full black edges
-            uInner:    { value: 0.25 },   // 0..uOuter: bright zone
-            uOuter:    { value: 0.85 },   // uInner..∞: fades to dark
-          },
-          vertexShader: `
-            varying vec2 vUv;
-            void main() {
-              vUv = uv;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform sampler2D tDiffuse;
-            uniform float uDarkness;
-            uniform float uInner;
-            uniform float uOuter;
-            varying vec2 vUv;
-            void main() {
-              vec4 c = texture2D(tDiffuse, vUv);
-              float d = length(vUv - vec2(0.5));
-              // v = 0 at center, 1 at edge (valid smoothstep ordering)
-              float v = smoothstep(uInner, uOuter, d);
-              // brightness: 1.0 at center, (1.0 - uDarkness) at edge
-              c.rgb *= mix(1.0, 1.0 - uDarkness, v);
-              gl_FragColor = c;
-            }
-          `,
-        };
-        return new (ShaderPass as any)(shader);
-      });
-
-      // Auto-rotate idle camera plus breathing motion on top.
-      const controls = fgRef.current.controls();
-      if (!controls) return () => {};
-      controls.autoRotate = true;
-      controls.autoRotateSpeed = 0.26;
-      ctlRef = controls;
-
-      // Breathing: gently drift controls.target on a slow Y+Z sine so the
-      // camera feels alive even when the user isn't orbiting. Adds ~0.6
-      // units of movement - enough to notice, not enough to disorient.
-      const baseTarget = controls.target.clone();
-      const t0 = performance.now();
-      const tick = (now: number) => {
-        if (cancelled || !ctlRef) return;
-        const t = (now - t0) / 1000;
-        // Pause breathing while user is interacting or within idle grace period.
-        const paused = now < breathPauseUntil;
-        if (!paused) {
-          ctlRef.target.set(
-            baseTarget.x,
-            baseTarget.y + Math.sin(t * 0.35) * 0.6,
-            baseTarget.z + Math.sin(t * 0.21 + 1.2) * 0.4,
-          );
-          ctlRef.update();
-        }
-        breathRafId = requestAnimationFrame(tick);
-      };
-      breathRafId = requestAnimationFrame(tick);
-
-      const bump = () => {
-        if (!ctlRef) return;
-        userInteracted = true;
-        ctlRef.autoRotate = false;
-        breathPauseUntil = performance.now() + 30_000;
-        if (idleTimer.current) clearTimeout(idleTimer.current);
-        idleTimer.current = setTimeout(() => {
-          if (!ctlRef) return;
-          ctlRef.autoRotate = true;
-          userInteracted = false;
-        }, 30_000);
-      };
-      const target = wrapRef.current;
-      target?.addEventListener('pointermove', bump);
-      target?.addEventListener('pointerdown', bump);
-      window.addEventListener('keydown', bump);
-      return () => {
-        target?.removeEventListener('pointermove', bump);
-        target?.removeEventListener('pointerdown', bump);
-        window.removeEventListener('keydown', bump);
-      };
-    };
-
-    const cleanup = attach();
-    return () => {
-      cancelled = true;
-      if (idleTimer.current) clearTimeout(idleTimer.current);
-      if (breathRafId != null) cancelAnimationFrame(breathRafId);
-      if (ctlRef) ctlRef.autoRotate = false;
-      cleanup.then((fn) => fn && fn()).catch(() => {});
-      if (fgRef.current && addedPasses.length) {
-        try {
-          const composer = fgRef.current.postProcessingComposer?.();
-          for (const p of addedPasses) composer?.removePass?.(p);
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-  }, [is3D, data, size.w, size.h]);
-
-  const linkColor = (l: Link) => {
-    const [sid, tid] = linkEnds(l);
-    if (neighbourSet) {
-      if (sid === selectedId || tid === selectedId) return EDGE_HIT[l.type];
-      return EDGE_DIM[l.type];
-    }
-    if (hover && (sid === hover.id || tid === hover.id)) {
-      return 'rgba(251, 146, 60, 0.35)';
-    }
-    return EDGE_BASE[l.type];
-  };
-
-  const linkWidth = (l: Link) => {
-    const [sid, tid] = linkEnds(l);
-    if (neighbourSet && (sid === selectedId || tid === selectedId)) return 1.4;
-    if (hover && (sid === hover.id || tid === hover.id)) return 1;
-    return 0.55;
-  };
-
-  // Directional particles only on edges touching hover OR selection.
-  // Keeps idle graph calm; hover/select makes it feel alive.
-  const particleCount = (l: Link) => {
-    const [sid, tid] = linkEnds(l);
-    const hitSelected =
-      selectedId != null && (sid === selectedId || tid === selectedId);
-    const hitHover = hover != null && (sid === hover.id || tid === hover.id);
-    return hitSelected || hitHover ? 2 : 0;
-  };
-
-  const nodeOpacity3D = (n: Node) => {
-    if (!neighbourSet) return 0.85;
-    return neighbourSet.has(n.id) ? 1 : 0.15;
-  };
-
-  const nodeColor = (n: Node) => {
-    if (selectedId === n.id) return '#fb923c';
-    const base =
-      colorMode === 'community'
-        ? communityColor(communities?.get(n.id))
-        : colorFor(n.label);
-    if (neighbourSet && !neighbourSet.has(n.id)) {
-      return base.length === 7 ? base + '26' : base; // 0.15 alpha
-    }
-    return base;
-  };
-
   return (
     <div className="graph-wrap" ref={wrapRef}>
       {err && <div className="graph-err">{err}</div>}
-      {data && size.w > 0 && !is3D && (
-        <ForceGraph2D
-          ref={fgRef}
-          graphData={data}
-          width={size.w}
-          height={size.h}
-          backgroundColor="#0a0a0a"
-          nodeRelSize={3}
-          nodeVal={(n: Node) => 1 + Math.min(n.degree, 20) * 0.5}
-          nodeLabel={(n: Node) => `${n.name} · ${n.label}`}
-          nodeColor={nodeColor}
-          linkColor={linkColor}
-          linkWidth={linkWidth}
-          linkDirectionalParticles={particleCount}
-          linkDirectionalParticleWidth={0.6}
-          linkDirectionalParticleSpeed={0.004}
-          linkDirectionalParticleColor={() => '#fde68a'}
-          cooldownTicks={100}
-          d3VelocityDecay={0.3}
-          onNodeHover={(n: Node | null) => setHover(n)}
-          onNodeClick={(n: Node) => setSelection(n.id)}
-          onBackgroundClick={() => setSelection(null)}
-          nodeCanvasObjectMode={() => 'after'}
-          nodeCanvasObject={(n: Node, ctx: CanvasRenderingContext2D, scale: number) => {
-            const isSelected = selectedId === n.id;
-            const isNeighbour = neighbourSet && neighbourSet.has(n.id);
-            const show = isSelected || (isNeighbour && neighbourSet) || n.degree >= 6 || scale > 2.4;
-            if (!show) return;
-            const r = 3 + Math.min(n.degree, 20) * 0.5;
-            const fontSize = Math.max(9, 11 / scale);
-            ctx.font = `${isSelected ? 600 : 400} ${fontSize}px "Space Grotesk", ui-sans-serif`;
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            const alpha = neighbourSet && !isNeighbour ? 0.22 : 0.78;
-            ctx.fillStyle = isSelected
-              ? 'rgba(251, 146, 60, 1)'
-              : `rgba(230, 230, 230, ${alpha})`;
-            ctx.fillText(n.name, (n.x ?? 0) + r + 3, n.y ?? 0);
+      {data && rgNodes.length > 0 && (
+        <GraphCanvas
+          key={is3D ? '3d' : '2d'}
+          nodes={rgNodes}
+          edges={rgEdges}
+          layoutType={is3D ? 'forceDirected3d' : 'forceDirected2d'}
+          selections={selections}
+          actives={actives}
+          theme={HERMES_THEME}
+          labelType="auto"
+          cameraMode={is3D ? 'rotate' : 'pan'}
+          draggable
+          edgeArrowPosition="none"
+          onNodeClick={(n: any) => {
+            const numericId = n?.data?.numericId ?? Number.parseInt(n?.id, 10);
+            if (Number.isFinite(numericId)) setSelection(numericId);
           }}
-        />
-      )}
-      {data && size.w > 0 && is3D && (
-        <ForceGraph3D
-          ref={fgRef}
-          graphData={data}
-          width={size.w}
-          height={size.h}
-          backgroundColor="#0a0a0a"
-          nodeRelSize={4}
-          nodeVal={(n: Node) => 1 + Math.min(n.degree, 20) * 0.6}
-          nodeLabel={(n: Node) => `${n.name} · ${n.label}`}
-          nodeColor={(n: Node) => {
-            if (selectedId === n.id) return '#fb923c';
-            return colorMode === 'community'
-              ? communityColor(communities?.get(n.id))
-              : colorFor(n.label);
-          }}
-          nodeOpacity={nodeOpacity3D as any}
-          nodeThreeObjectExtend={true}
-          nodeThreeObject={(n: Node) => {
-            // Extend the default sphere mesh with a halo ring for big hubs
-            // (Buero Birnbaum, RA Ostendorf, EstateMate, etc.). degree=25
-            // threshold ~matches top ~8-12 hub nodes in the graph. Hermes's
-            // force-graph-3d default node is a sphere sized by nodeRelSize;
-            // we only add a ring on top via nodeThreeObjectExtend=true.
-            if (n.degree < 25) return null;
-            const radius = 3 + Math.min(n.degree, 40) * 0.45;
-            const geom = new THREE.TorusGeometry(radius * 1.35, 0.18, 12, 48);
-            const mat = new THREE.MeshBasicMaterial({
-              color: selectedId === n.id ? 0xfb923c : 0xfde68a,
-              transparent: true,
-              opacity: 0.32,
+          onCanvasClick={() => setSelection(null)}
+          onNodePointerOver={(n: any) => {
+            if (!n) {
+              setHover(null);
+              return;
+            }
+            setHover({
+              id: n?.data?.numericId ?? Number.parseInt(n?.id, 10),
+              name: n?.label ?? '',
+              label: n?.data?.label ?? '',
+              degree: n?.data?.degree ?? 0,
             });
-            const ring = new THREE.Mesh(geom, mat);
-            ring.rotation.x = Math.PI / 2;
-            (ring as any).userData.isHubHalo = true;
-            return ring;
           }}
-          linkColor={linkColor}
-          linkWidth={linkWidth}
-          linkOpacity={0.55}
-          linkDirectionalParticles={particleCount}
-          linkDirectionalParticleWidth={0.8}
-          linkDirectionalParticleSpeed={0.004}
-          linkDirectionalParticleColor={() => '#fde68a'}
-          cooldownTicks={120}
-          onNodeClick={(n: Node) => setSelection(n.id)}
-          onBackgroundClick={() => setSelection(null)}
-          onNodeHover={(n: Node | null) => setHover(n)}
+          onNodePointerOut={() => setHover(null)}
         />
       )}
       <div className="legend">
