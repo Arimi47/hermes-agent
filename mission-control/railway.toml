@@ -1,0 +1,20 @@
+# Per-service config for the hermes-mission-control Railway service.
+# rootDirectory is set to "mission-control" in the Railway UI; Railway
+# searches for railway.toml inside that root first before falling back to
+# the repo root. Without this file, the root railway.toml (which is
+# hermes-agent's Dockerfile + /health healthcheck) gets inherited and
+# the Next.js build fails with "/start.sh: not found" because the
+# hermes-agent Dockerfile expects files (requirements.txt, start.sh,
+# server.py, ...) that don't exist inside mission-control/.
+#
+# Use Railpack auto-detection: it picks up package.json, runs
+# `npm ci && npm run build`, then `npm run start`. This is what was
+# already working before Railway started applying the root config to
+# this service (api change between 2026-04-22 and 2026-04-26).
+
+[build]
+builder = "railpack"
+
+[deploy]
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
