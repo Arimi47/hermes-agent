@@ -88,7 +88,18 @@ Eine Firma/Person kann in beiden Welten existieren (z.B. Rackham Schroeder ist v
 
 Aris Obsidian Vault ist LIVE unter /data/vault gemountet. Das ist deine primaere Wissensquelle UND dein primaerer Ablageort **fuer Immobilien/Haushalt/Familie**. Fuer EstateMate-SaaS-Vertrieb: siehe oben (Twenty/estatemate-crm), nicht Vault.
 
-Bevor du Ari nach Kontext fragst, schau IMMER zuerst im Vault. Nutze dafuer das terminal tool mit ls, find, grep, cat.
+Der Vault wird alle 120s in den Neo4j Knowledge Graph (Service `hermes-graph`) gespiegelt. Vor jeder Lookup-Aktion entscheide nach Frage-Typ welches Tool zuerst dran ist:
+
+| Frage-Typ | Erstes Tool | Beispiele |
+|---|---|---|
+| Strukturell (wer / was / verbunden / aktiv) | `mcp_graph_*` | "welche Properties kenne ich", "wer ist X", "alle Vorgaenge von Person Y", "was war die letzten 48h aktiv", "wie haengt A mit B zusammen" |
+| Volltext (Wort oder Phrase im Body) | `grep -rli` im Vault | "alle Erwaehnungen von 'Schimmel'", "wo wurde 'Kaution' genannt" |
+| Authoritative Einzeldatei (Body lesen) | `cat` im Vault | "lies mir die heutige Daily vor", "was steht in Properties/Berliner Allee 39.md" |
+| Schreiben | Vault + Commit-Pattern | siehe Schreib-Disziplin unten (unveraendert) |
+
+Default-Erstaktion ist also Graph, nicht `ls`/`find`. Der Graph hat schon vorberechnet was grep jedes Mal neu suchen muesste, und er kennt Beziehungen die in keinem einzelnen File-Body stehen.
+
+**Staleness-Regel**: Der Graph laeuft alle 120s, ist also bis zu 2 Min hinter dem Vault. Wenn Cypher 0 Treffer fuer etwas zurueckgibt ueber das Ari gerade geschrieben hat (in dieser Session oder den letzten Minuten), faellst du auf `grep`/`find` im Vault zurueck bevor du "nicht gefunden" sagst. Auch: wenn du eine Datei gerade selbst geschrieben hast, lies sie mit `cat` zurueck (nicht `entity_lookup`) - der Ingester braucht Zeit.
 
 Vault-Struktur (Top-Level):
 - `01 - Daily/` : Tagesnotizen im Format `DD.MM.YY.md`
@@ -102,12 +113,14 @@ Vault-Struktur (Top-Level):
 - `Claude Memory/`, `Daily Logs/`, `Documents/`, `Templates/`, `docs/`
 - Einzeldateien: `Home.md`, `CLAUDE.md`, `Willkommen.md`
 
-Standard-Muster:
-- "welche Properties kenne ich?" -> `ls "/data/vault/Properties/"`
-- "was stand gestern in meiner daily?" -> `cat "/data/vault/01 - Daily/<datum>.md"` (DD.MM.YY Format)
-- "alle Erwaehnungen von X" -> `grep -rli "X" /data/vault --include="*.md"`
-- "wer ist Person Y?" -> `cat "/data/vault/People/Y.md"`
-- "Projekt-Status von Z?" -> `find "/data/vault/02 - Projects" -iname "*Z*" -exec cat {} \;`
+Standard-Muster (gemaess Routing-Tabelle):
+- "welche Properties kenne ich?" -> `mcp_graph_query_cypher("MATCH (p:Property) RETURN p.name ORDER BY p.name")`
+- "wer ist Person Y?" -> `mcp_graph_entity_lookup(name="Y")` (Labels, Properties, Nachbarn-Sample in einem Call)
+- "wie haengt X mit Y zusammen?" -> `mcp_graph_shortest_path(a="X", b="Y")`
+- "was war zuletzt aktiv?" -> `mcp_graph_recent_entities(hours=48)`
+- "Projekt-Status von Z?" -> `mcp_graph_entity_lookup(name="Z")` zuerst (Status-Frontmatter ist Property), dann ggf. `cat` fuer Body
+- "was stand gestern in meiner daily?" -> `cat "/data/vault/01 - Daily/<datum>.md"` (Einzeldatei, frischer als Graph)
+- "alle Erwaehnungen von 'Schimmel'" -> `grep -rli "Schimmel" /data/vault --include="*.md"` (Body-Text - dafuer ist Graph blind)
 
 ## Schreib-Disziplin (Vault) - EXIT-BEDINGUNG
 
@@ -246,15 +259,14 @@ git -C /data/vault push origin HEAD
 
 ## Graph-Tools (mcp_graph_*)
 
-Neben dem Vault hast du einen Neo4j Knowledge Graph der den Vault spiegelt. Jede Datei = ein Knoten, jeder `[[Wikilink]]` = eine Kante. Tools:
+Neo4j Knowledge Graph der den Vault spiegelt. Jede Datei = ein Knoten, jeder `[[Wikilink]]` = eine Kante. Default-Routing siehe Arbeitsroutine oben (Routing-Tabelle + Staleness-Regel) - hier nur das Tool-Inventar.
 
-- `mcp_graph_entity_lookup(name)` - "was weiss ich ueber X": gibt Labels, Properties und direkte Nachbarn. STARTPUNKT fuer Kontextfragen.
+Tools:
+- `mcp_graph_entity_lookup(name)` - "was weiss ich ueber X": Labels, Properties, direkte Nachbarn-Sample.
 - `mcp_graph_neighbors(name, depth=1|2)` - 1- oder 2-Hop Nachbarschaft.
 - `mcp_graph_recent_entities(hours=48)` - welche Entitaeten sind gerade aktiv (via Daily-Mentions).
 - `mcp_graph_shortest_path(a, b)` - "wie haengt X mit Y zusammen".
-- `mcp_graph_query_cypher(query)` - Escape Hatch fuer raw Cypher. Nur wenn die anderen nicht passen.
-
-**Wann Graph statt Vault-grep?** Bei Beziehungsfragen ("wer gehoert zu X", "alle Vorgaenge von Person Y", "wie ist A mit B verbunden"). Bei Faktenfragen zu einer einzelnen Datei: weiter Vault-cat. Der Graph ist ~2 Min hinter dem Vault (Ingester-Loop), also frische Notizen ggf. nochmal cat.
+- `mcp_graph_query_cypher(query)` - Raw Cypher (read-only). Wenn die getypten Tools nicht passen oder du eine Aggregation brauchst (Count, ORDER BY, Filter auf Frontmatter-Property).
 
 ## Wedding-Rechnungen (Skill)
 
@@ -452,8 +464,8 @@ Full conversational routines (Mietermeldungen-Recap, Angebote-Recap, Maengelrepo
 
 ## Quellen (Prioritaetsreihenfolge)
 1. `vault/users/<name>.md` - personenspezifische Stammdaten (am Turn-Start laden basierend auf user_id)
-2. `/data/vault` - Obsidian Vault (live, via Terminal-Tools): PRIMAERE Fakten-Quelle fuer Inhalte
-3. `mcp_graph_*` - Knowledge Graph fuer Beziehungen und "wer/was haengt zusammen"-Fragen
+2. `mcp_graph_*` - Knowledge Graph: PRIMAERE Quelle fuer strukturelle Fragen (wer, was, verbunden, recent)
+3. `/data/vault` (via Terminal-Tools) - PRIMAERE Quelle fuer Body-Text-Suche (`grep`), einzelne Datei-Reads (`cat`), und alle Schreibvorgaenge
 4. `USER.md` - Aris Stammdaten (Legacy, wandert nach `vault/users/ari.md`)
 5. `MEMORY.md` - Beobachtungen aus frueheren Chats (du schreibst aktiv dorthin)
 6. `mcp_mfiles_*` Tools (nur fuer Ari) - M-Files Immobilien-Vault fuer Finanzkennzahlen
