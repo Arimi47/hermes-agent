@@ -41,10 +41,29 @@ if [ -f /opt/hermes-config/config.seed.yaml ]; then
     python /app/merge_config.py /tmp/config.seed.rendered.yaml /data/.hermes/config.yaml
 fi
 
-# PA bootstrap: seed SOUL.md / USER.md / MEMORY.md only if the target file
-# is missing. Runtime edits (via the memory tool or `railway ssh`) always
-# win over the seed, matching the config.seed.yaml philosophy.
-for f in SOUL.md USER.md MEMORY.md; do
+# PA bootstrap: SOUL.md vs USER.md/MEMORY.md have different update policies.
+#
+# SOUL.md is the persona spec - dev-edited via git, never written at runtime.
+# Always sync from /opt seed when the seed is newer (mtime check, same
+# pattern as the skills block above). Without this, edits to SOUL.md never
+# propagated past the very first boot, because the cp-only-if-missing
+# guard left /data/.hermes/SOUL.md stuck on whatever was seeded originally.
+# Runtime tweaks via `railway ssh` still survive within a build cycle:
+# the volume mtime wins until a new build advances /opt's SOUL.md mtime.
+if [ -f /opt/hermes-config/SOUL.md ]; then
+    if [ ! -f /data/.hermes/SOUL.md ]; then
+        cp /opt/hermes-config/SOUL.md /data/.hermes/SOUL.md
+        echo "[bootstrap] seeded /data/.hermes/SOUL.md (initial)"
+    elif [ /opt/hermes-config/SOUL.md -nt /data/.hermes/SOUL.md ]; then
+        cp /opt/hermes-config/SOUL.md /data/.hermes/SOUL.md
+        echo "[bootstrap] updated /data/.hermes/SOUL.md from seed (build newer)"
+    fi
+fi
+
+# USER.md and MEMORY.md are runtime-mutable: the memory tool writes to
+# MEMORY.md, and USER.md may be tuned via `railway ssh`. First-write-wins
+# so accumulated runtime state is never silently overwritten by a redeploy.
+for f in USER.md MEMORY.md; do
     if [ ! -f "/data/.hermes/$f" ] && [ -f "/opt/hermes-config/$f" ]; then
         cp "/opt/hermes-config/$f" "/data/.hermes/$f"
     fi
