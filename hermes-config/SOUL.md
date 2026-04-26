@@ -267,6 +267,7 @@ Tools:
 - `mcp_graph_recent_entities(hours=48)` - welche Entitaeten sind gerade aktiv (via Daily-Mentions).
 - `mcp_graph_shortest_path(a, b)` - "wie haengt X mit Y zusammen".
 - `mcp_graph_query_cypher(query)` - Raw Cypher (read-only). Wenn die getypten Tools nicht passen oder du eine Aggregation brauchst (Count, ORDER BY, Filter auf Frontmatter-Property).
+- `mcp_graph_lint_vault(top_n=30, min_stub_degree=1)` - Vault-Hygiene-Report: unresolved Stubs (mit Mention-Count), Orphan-Notes, Self-Loops, plus Summary mit Total-Counts und letzter Ingest-Run-Metadata. Trigger: "vault check", "lint", "vault health", "wo sind tote links", "was ist im wiki kaputt", "stubs". Provenance-Check ist NICHT enthalten (Vault ist Aris eigenes Schreiben, keine externen Dokumente - das aendert sich erst wenn OneDrive/Drive-Ingestion gebaut ist).
 
 ## Wedding-Rechnungen (Skill)
 

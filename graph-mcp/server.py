@@ -130,5 +130,102 @@ def graph_query_cypher(query: str) -> dict:
     return {"rows": rows, "count": len(rows)}
 
 
+@mcp.tool()
+def lint_vault(top_n: int = 30, min_stub_degree: int = 1) -> dict:
+    """Vault health report. Surfaces graph-internal hygiene issues:
+
+    - Unresolved Stubs: wikilink targets [[X]] that were referenced
+      but never written as their own .md file. Ranked by inbound
+      MENTIONS count, so high-degree entries are concepts the user
+      keeps referring to without filing.
+    - Orphan notes: notes with no inbound MENTIONS or REFERS_TO edges.
+      Excludes folders that are leaf-by-design (Daily, DailyLog,
+      Template, Dashboard, Memory) and the IngestRun singleton.
+    - Self-loops: a note that wikilinks itself, usually a typo or a
+      copy-paste accident.
+
+    Plus a summary header with total node count, total Stub count, and
+    the last ingest run's metadata.
+
+    Use when Ari asks: "vault check", "lint", "vault health", "wo sind
+    tote links", "was ist im wiki kaputt", "stubs".
+
+    Provenance / source-frontmatter checks are intentionally NOT in this
+    report - the vault is first-party authored, not synthesised from
+    external documents. Add provenance lint once OneDrive/Drive
+    ingestion lands.
+    """
+    stubs = _run(
+        """
+        MATCH (s:Stub)
+        OPTIONAL MATCH (s)<-[:MENTIONS]-(m)
+        WITH s, count(m) AS mention_count
+        WHERE mention_count >= $min_degree
+        RETURN s.name AS name, mention_count
+        ORDER BY mention_count DESC, name
+        LIMIT $top_n
+        """,
+        min_degree=min_stub_degree, top_n=top_n,
+    )
+
+    orphans = _run(
+        """
+        MATCH (n)
+        WHERE NOT n:Stub
+          AND NOT n:Daily AND NOT n:DailyLog
+          AND NOT n:Template AND NOT n:Dashboard
+          AND NOT n:Memory AND NOT n:IngestRun
+          AND NOT (n)<-[:MENTIONS]-()
+          AND NOT (n)<-[:REFERS_TO]-()
+        RETURN n.name AS name, labels(n) AS labels,
+               n.folder AS folder, n.path AS path
+        ORDER BY name
+        LIMIT $top_n
+        """,
+        top_n=top_n,
+    )
+
+    self_loops = _run(
+        """
+        MATCH (n)-[r:MENTIONS|REFERS_TO]->(n)
+        RETURN n.name AS name, labels(n) AS labels, type(r) AS edge_type
+        ORDER BY name
+        LIMIT 50
+        """,
+    )
+
+    summary = _run(
+        """
+        CALL { MATCH (n) WHERE NOT n:IngestRun RETURN count(n) AS total_nodes }
+        CALL { MATCH (s:Stub) RETURN count(s) AS total_stubs }
+        OPTIONAL MATCH (i:IngestRun {key: 'latest'})
+        RETURN total_nodes, total_stubs,
+               toString(i.at) AS last_ingest_at,
+               i.files AS last_ingest_files,
+               i.mentions AS last_ingest_mentions,
+               i.refers AS last_ingest_refers,
+               i.duration_ms AS last_ingest_duration_ms,
+               i.error AS last_ingest_error
+        """
+    )
+
+    return {
+        "summary": summary[0] if summary else {},
+        "unresolved_stubs": {
+            "filter_min_degree": min_stub_degree,
+            "count_returned": len(stubs),
+            "items": stubs,
+        },
+        "orphan_notes": {
+            "count_returned": len(orphans),
+            "items": orphans,
+        },
+        "self_loops": {
+            "count_returned": len(self_loops),
+            "items": self_loops,
+        },
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
