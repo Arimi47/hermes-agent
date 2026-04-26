@@ -247,37 +247,45 @@ export default function Graph() {
     <div className="graph-wrap" ref={wrapRef}>
       {err && <div className="graph-err">{err}</div>}
       {data && rgNodes.length > 0 && (
-        <GraphCanvas
-          key={is3D ? '3d' : '2d'}
-          nodes={rgNodes}
-          edges={rgEdges}
-          layoutType={is3D ? 'forceDirected3d' : 'forceDirected2d'}
-          selections={selections}
-          actives={actives}
-          theme={HERMES_THEME}
-          labelType="auto"
-          cameraMode={is3D ? 'rotate' : 'pan'}
-          draggable
-          edgeArrowPosition="none"
-          onNodeClick={(n: any) => {
-            const numericId = n?.data?.numericId ?? Number.parseInt(n?.id, 10);
-            if (Number.isFinite(numericId)) setSelection(numericId);
-          }}
-          onCanvasClick={() => setSelection(null)}
-          onNodePointerOver={(n: any) => {
-            if (!n) {
-              setHover(null);
-              return;
-            }
-            setHover({
-              id: n?.data?.numericId ?? Number.parseInt(n?.id, 10),
-              name: n?.label ?? '',
-              label: n?.data?.label ?? '',
-              degree: n?.data?.degree ?? 0,
-            });
-          }}
-          onNodePointerOut={() => setHover(null)}
-        />
+        // Reagraph's GraphCanvas renders an internal Three.js canvas that
+        // needs a positioned parent with definite pixel dimensions to size
+        // correctly. height: 100% on .graph-wrap doesn't propagate cleanly
+        // through reagraph's wrapper inside a CSS grid cell, so we anchor
+        // it explicitly with absolute inset:0 (the .graph-wrap is already
+        // position: relative so this resolves to its bounds).
+        <div style={{ position: 'absolute', inset: 0 }}>
+          <GraphCanvas
+            key={is3D ? '3d' : '2d'}
+            nodes={rgNodes}
+            edges={rgEdges}
+            layoutType={is3D ? 'forceDirected3d' : 'forceDirected2d'}
+            selections={selections}
+            actives={actives}
+            theme={HERMES_THEME}
+            labelType="auto"
+            cameraMode={is3D ? 'rotate' : 'pan'}
+            draggable
+            edgeArrowPosition="none"
+            onNodeClick={(n: any) => {
+              const numericId = n?.data?.numericId ?? Number.parseInt(n?.id, 10);
+              if (Number.isFinite(numericId)) setSelection(numericId);
+            }}
+            onCanvasClick={() => setSelection(null)}
+            onNodePointerOver={(n: any) => {
+              if (!n) {
+                setHover(null);
+                return;
+              }
+              setHover({
+                id: n?.data?.numericId ?? Number.parseInt(n?.id, 10),
+                name: n?.label ?? '',
+                label: n?.data?.label ?? '',
+                degree: n?.data?.degree ?? 0,
+              });
+            }}
+            onNodePointerOut={() => setHover(null)}
+          />
+        </div>
       )}
       <div className="legend">
         {colorMode === 'label' ? (
