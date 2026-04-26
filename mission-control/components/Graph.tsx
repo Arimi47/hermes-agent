@@ -50,9 +50,14 @@ type RGEdge = {
   size?: number;
 };
 
+// Reagraph passes these strings to THREE.Color, which only accepts hex / hsl /
+// css-named colors and silently strips alpha from rgba(). Using rgba here
+// produced 200+ "Alpha component will be ignored" warnings AND left the
+// canvas blank, because the broken color values cascaded through the
+// render pipeline. Hex only.
 const EDGE_FILL: Record<LinkType, string> = {
-  MENTIONS: 'rgba(180, 180, 180, 0.55)',
-  REFERS_TO: 'rgba(163, 177, 138, 0.7)',
+  MENTIONS: '#5e5e5e',     // mid-gray, alpha simulated via theme.edge.opacity
+  REFERS_TO: '#7e8a6e',    // dim sage to differentiate from prose mentions
 };
 
 const linkEnds = (l: Link): [number, number] => [
@@ -63,6 +68,10 @@ const linkEnds = (l: Link): [number, number] => [
 // Theme tuned to match the existing Mission Control palette: warm dark
 // canvas, label-color-as-fill so per-node fills survive, dimming via
 // inactiveOpacity for the "select X, dim everything else" UX.
+// All color values must be hex / css-named / hsl - rgba() is parsed by
+// THREE.Color which strips alpha and emits a warning per call (was 200+
+// per render). Use the opacity / inactiveOpacity / selectedOpacity fields
+// for transparency instead.
 const HERMES_THEME = {
   canvas: {
     background: '#0a0a0a',
@@ -81,13 +90,13 @@ const HERMES_THEME = {
     },
   },
   edge: {
-    fill: 'rgba(180,180,180,0.35)',
+    fill: '#5e5e5e',
     activeFill: '#fb923c',
     opacity: 0.55,
     selectedOpacity: 0.9,
     inactiveOpacity: 0.06,
     label: {
-      color: '#888',
+      color: '#888888',
       stroke: '#0a0a0a',
       activeColor: '#fb923c',
       fontSize: 6,
@@ -95,7 +104,7 @@ const HERMES_THEME = {
   },
   ring: { fill: '#54616D', activeFill: '#fb923c' },
   arrow: { fill: '#474B56', activeFill: '#fb923c' },
-  lasso: { border: '1px solid #fb923c', background: 'rgba(251,146,60,0.08)' },
+  lasso: { border: '1px solid #fb923c', background: '#fb923c14' },
   cluster: {
     stroke: '#474B56',
     opacity: 1,
@@ -117,6 +126,24 @@ export default function Graph() {
   const [err, setErr] = useState<string | null>(null);
   const [hover, setHover] = useState<Node | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const graphRef = useRef<any>(null);
+
+  // Force-directed layouts spread nodes to arbitrary world coordinates and
+  // reagraph's default camera does NOT auto-fit to that bounding box. Without
+  // this, a 433-node graph lays itself out off-screen relative to the camera
+  // and the canvas appears blank. Wait for the layout cooldown then fit.
+  useEffect(() => {
+    if (!data || !graphRef.current) return;
+    const t = setTimeout(() => {
+      try {
+        graphRef.current?.centerGraph?.();
+        graphRef.current?.fitNodesInView?.();
+      } catch {
+        /* noop - reagraph ref not ready */
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [data, is3D]);
 
   useEffect(() => {
     let cancelled = false;
@@ -255,6 +282,7 @@ export default function Graph() {
         // position: relative so this resolves to its bounds).
         <div style={{ position: 'absolute', inset: 0 }}>
           <GraphCanvas
+            ref={graphRef}
             key={is3D ? '3d' : '2d'}
             nodes={rgNodes}
             edges={rgEdges}
