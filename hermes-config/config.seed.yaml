@@ -19,10 +19,12 @@ data_dir: "/data/.hermes"
 # session. Next session starts fresh with Codex OAuth again - effectively
 # a "only when Plus quota is full" escape hatch.
 #
-# Model: gpt-5.4 (reasoning-capable). gpt-4o rejected with "Encrypted
-# content is not supported with this model" - Codex produces encrypted
-# reasoning blocks that only reasoning-capable fallbacks accept.
-# gpt-5.4 matches what Ari uses in ChatGPT Plus directly.
+# Model: gpt-5.4 (reasoning-capable, available via API key). gpt-4o
+# rejected with "Encrypted content is not supported with this model" -
+# Codex produces encrypted reasoning blocks that only reasoning-capable
+# fallbacks accept. gpt-5.5 is intentionally NOT used here: per OpenAI
+# (2026-04), gpt-5.5 is available only with ChatGPT OAuth, not with
+# API-key auth - which is what this fallback uses.
 fallback_model:
   provider: custom
   model: gpt-5.4
