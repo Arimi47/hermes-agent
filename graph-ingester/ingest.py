@@ -187,19 +187,54 @@ def yaml_edges(tx, src_name: str, props: dict) -> int:
     return made
 
 
-def ingest(driver: Driver) -> tuple[int, int, int]:
-    """Three-pass walk:
+def cleanup_stale(tx, seen_paths: list[str]) -> int:
+    """Delete file-backed nodes whose path is no longer in the vault.
+
+    Necessary because earlier passes only upsert. When a file is renamed
+    or deleted, the old node stays in the graph with a stale path,
+    which produces ghost entries in the Mission Control task board and
+    breaks the mark-done write-back (POST /api/vault/task/status returns
+    'invalid or unknown path' for files that no longer exist).
+
+    Preserved categories (NOT deleted):
+      - :Stub nodes (no `path` property; unresolved wikilink targets)
+      - :IngestRun singleton (no `path`; metadata)
+      - Any other property-only node added in the future without `path`
+
+    Returns the number of nodes deleted.
+    """
+    res = tx.run(
+        """
+        MATCH (n)
+        WHERE n.path IS NOT NULL
+          AND NOT n.path IN $paths
+        WITH n, count(n) AS _
+        DETACH DELETE n
+        RETURN count(_) AS deleted
+        """,
+        paths=seen_paths,
+    ).single()
+    return res["deleted"] if res else 0
+
+
+def ingest(driver: Driver) -> tuple[int, int, int, int]:
+    """Four-pass walk:
       1. Upsert all labeled nodes (so wikilink targets match existing
          labeled nodes instead of spawning Stubs).
       2. MENTIONS edges from [[wikilinks]] in the content.
       3. REFERS_TO edges from YAML props whose string values match
          existing node names (promotes "eigentuemer: X" style
          references to graph edges).
+      4. Cleanup pass: delete file-backed nodes whose path is no longer
+         in the vault (handles renames and deletes; safe because Stubs
+         and IngestRun have no `path` property).
     """
     files = 0
     mention_edges = 0
     refer_edges = 0
+    deleted = 0
     parsed: list[tuple[str, str, str, dict]] = []
+    seen_paths: list[str] = []
     for path in walk_vault():
         try:
             post = frontmatter.loads(path.read_text(encoding="utf-8", errors="replace"))
@@ -209,8 +244,10 @@ def ingest(driver: Driver) -> tuple[int, int, int]:
         name = node_name(path)
         folder = folder_of(path)
         label = label_for(folder)
+        rel_path = str(path.relative_to(VAULT_PATH))
+        seen_paths.append(rel_path)
         props = {
-            "path": str(path.relative_to(VAULT_PATH)),
+            "path": rel_path,
             "folder": folder,
             **{k: v for k, v in post.metadata.items() if v is not None},
         }
@@ -228,7 +265,11 @@ def ingest(driver: Driver) -> tuple[int, int, int]:
         # REFERS_TO edges see the full node set.
         for name, _label, _content, props in parsed:
             refer_edges += session.execute_write(yaml_edges, name, props)
-    return files, mention_edges, refer_edges
+        # Pass 4: cleanup stale file-backed nodes. Guarded on files > 0
+        # so a transient empty walk (e.g. mid-clone) cannot wipe the graph.
+        if files > 0:
+            deleted = session.execute_write(cleanup_stale, seen_paths)
+    return files, mention_edges, refer_edges, deleted
 
 
 def record_run(driver: Driver, files: int, mentions: int, refers: int, duration_ms: int, error: str | None = None) -> None:
