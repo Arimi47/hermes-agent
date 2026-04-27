@@ -129,9 +129,19 @@ export async function GET(req: Request) {
       })),
     });
   } catch (e) {
+    // Return the error AND empty arrays so the client never has to
+    // defend against missing fields - just check `error` to know it
+    // failed. Status 200 (vs 500) so a transient Neo4j blip doesn't
+    // poison the panel with a fetch-level error.
     return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 },
+      {
+        summary: null,
+        stubs: [],
+        orphans: [],
+        self_loops: [],
+        error: (e as Error).message,
+      },
+      { status: 200 },
     );
   }
 }

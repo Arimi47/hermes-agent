@@ -42,10 +42,28 @@ export default function LintPanel() {
     const load = async () => {
       try {
         const r = await fetch('/api/lint?top=100', { cache: 'no-store' });
-        const j = (await r.json()) as LintData;
-        if (!cancelled) setData(j);
+        const raw = (await r.json()) as Partial<LintData>;
+        // Normalise: any field could be missing if the server returned
+        // a partial response (e.g. an error before all queries ran).
+        if (!cancelled) {
+          setData({
+            summary: raw.summary ?? null,
+            stubs: Array.isArray(raw.stubs) ? raw.stubs : [],
+            orphans: Array.isArray(raw.orphans) ? raw.orphans : [],
+            self_loops: Array.isArray(raw.self_loops) ? raw.self_loops : [],
+            error: raw.error,
+          });
+        }
       } catch (e) {
-        if (!cancelled) setData({ summary: null, stubs: [], orphans: [], self_loops: [], error: (e as Error).message });
+        if (!cancelled) {
+          setData({
+            summary: null,
+            stubs: [],
+            orphans: [],
+            self_loops: [],
+            error: (e as Error).message,
+          });
+        }
       }
     };
     load();
@@ -63,13 +81,16 @@ export default function LintPanel() {
   };
 
   const counts = useMemo(() => ({
-    stubs: data?.stubs.length ?? 0,
-    orphans: data?.orphans.length ?? 0,
-    loops: data?.self_loops.length ?? 0,
+    stubs: data?.stubs?.length ?? 0,
+    orphans: data?.orphans?.length ?? 0,
+    loops: data?.self_loops?.length ?? 0,
   }), [data]);
 
   if (!data) return <div className="activity-empty">loading lint</div>;
   if (data.error) return <div className="activity-empty">error · {data.error}</div>;
+  const stubs = data.stubs ?? [];
+  const orphans = data.orphans ?? [];
+  const loops = data.self_loops ?? [];
 
   return (
     <div className="lint-panel">
@@ -117,10 +138,10 @@ export default function LintPanel() {
       </div>
 
       <div className="lint-list">
-        {section === 'stubs' && data.stubs.length === 0 && (
+        {section === 'stubs' && stubs.length === 0 && (
           <div className="activity-empty">no unresolved stubs</div>
         )}
-        {section === 'stubs' && data.stubs.map((s) => (
+        {section === 'stubs' && stubs.map((s) => (
           <button
             key={s.id}
             className="lint-row"
@@ -134,10 +155,10 @@ export default function LintPanel() {
           </button>
         ))}
 
-        {section === 'orphans' && data.orphans.length === 0 && (
+        {section === 'orphans' && orphans.length === 0 && (
           <div className="activity-empty">no orphan notes</div>
         )}
-        {section === 'orphans' && data.orphans.map((o) => {
+        {section === 'orphans' && orphans.map((o) => {
           const primary = o.labels?.find((l) => l !== 'Stub') ?? 'Note';
           return (
             <button
@@ -157,10 +178,10 @@ export default function LintPanel() {
           );
         })}
 
-        {section === 'loops' && data.self_loops.length === 0 && (
+        {section === 'loops' && loops.length === 0 && (
           <div className="activity-empty">no self-loops</div>
         )}
-        {section === 'loops' && data.self_loops.map((l) => {
+        {section === 'loops' && loops.map((l) => {
           const primary = l.labels?.find((x) => x !== 'Stub') ?? 'Note';
           return (
             <button
