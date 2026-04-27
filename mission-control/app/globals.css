@@ -1099,3 +1099,134 @@ main {
   color: var(--fg-dim);
   background: rgba(12, 12, 12, 0.5);
 }
+
+/* ---- Lint panel ---- */
+.lint-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lint-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(20, 20, 20, 0.5);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.lint-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lint-stat-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.lint-stat-value {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.lint-stat-value.accent { color: var(--accent); }
+
+.lint-tabs {
+  display: flex;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.lint-tab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  transition: color 140ms, border-color 140ms, background 140ms;
+}
+
+.lint-tab:hover {
+  color: var(--fg);
+  border-color: var(--border-hi);
+}
+
+.lint-tab.active {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: rgba(251, 146, 60, 0.05);
+}
+
+.lint-tab-n {
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.lint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lint-row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 8px 4px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms;
+  color: var(--fg);
+  font-family: var(--display);
+  font-size: 12px;
+}
+
+.lint-row:hover {
+  background: rgba(251, 146, 60, 0.04);
+  border-bottom-color: var(--border);
+}
+
+.lint-pill {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.lint-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.lint-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+}
