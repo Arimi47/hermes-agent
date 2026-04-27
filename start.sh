@@ -138,6 +138,21 @@ if [ -n "${NEO4J_URI:-}" ] && [ -n "${NEO4J_PASSWORD:-}" ]; then
         done
     ) &
     echo "[graph] background ingester loop started (PID $!)"
+
+    # Weekly lint report loop - hourly tick, idempotent. lint_report.py
+    # exits 0 (no-op) if the current ISO week's report file already
+    # exists in Dashboards/, so this loop effectively writes one
+    # snapshot per ISO week (the first tick after the rollover wins).
+    # Initial delay > graph-ingester's so the IngestRun singleton and
+    # at least one full pass exist before the first lint report runs.
+    (
+        sleep 240
+        while true; do
+            python /app/graph-ingester/lint_report.py 2>&1 | sed 's/^/[lint-report] /' || true
+            sleep 3600
+        done
+    ) &
+    echo "[lint] background weekly lint report loop started (PID $!)"
 fi
 
 exec python /app/server.py
