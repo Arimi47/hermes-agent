@@ -190,6 +190,70 @@ def commit_and_push(path: Path, label: str) -> None:
         print(f"git error: {e}", file=sys.stderr)
 
 
+def send_triage_nudge(label: str, lint: dict[str, Any]) -> None:
+    """Send Ari a Telegram message summarising the new lint report and
+    prompting a triage conversation. Best-effort: missing env vars are a
+    silent no-op so the cron loop never crashes on a misconfigured deploy.
+
+    Required env vars:
+      TELEGRAM_BOT_TOKEN  - Hermes' bot token (already used by server.py)
+      TELEGRAM_LINT_CHAT_ID - Ari's user_id (= chat_id for direct messages)
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_LINT_CHAT_ID")
+    if not token or not chat_id:
+        print("triage-nudge skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_LINT_CHAT_ID unset")
+        return
+
+    stubs = lint.get("stubs") or []
+    orphans = lint.get("orphans") or []
+    loops = lint.get("self_loops") or []
+    summary = lint.get("summary") or {}
+
+    top_stubs = stubs[:3]
+    top_lines = [
+        f"   - [[{s['name']}]] ({s.get('mention_count', 0)}x)"
+        for s in top_stubs
+    ]
+    body = [
+        f"Wiki health - {label}",
+        "",
+        f"Total nodes: {summary.get('total_nodes', 0)}",
+        f"Stubs: {len(stubs)} (of which top by mentions:)" if top_stubs else f"Stubs: {len(stubs)}",
+        *top_lines,
+        f"Orphans: {len(orphans)}",
+        f"Self-loops: {len(loops)}",
+        "",
+        f"Report: Dashboards/Lint Report - {label}.md",
+        "",
+        "Reply 'lint triage' wenn ich die Top-Items mit dir durchgehen soll.",
+    ]
+    text = "\n".join(body)
+
+    try:
+        import urllib.request
+        import json as _json
+        req_body = _json.dumps({
+            "chat_id": chat_id,
+            "text": text,
+            "disable_notification": True,
+            "disable_web_page_preview": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=req_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status >= 400:
+                print(f"triage-nudge HTTP {resp.status}", file=sys.stderr)
+            else:
+                print("triage-nudge sent")
+    except Exception as e:
+        print(f"triage-nudge error: {e}", file=sys.stderr)
+
+
 def main() -> int:
     now = datetime.now(timezone.utc)
     label = iso_week_label(now)
@@ -216,6 +280,7 @@ def main() -> int:
     out.write_text(md, encoding="utf-8")
     print(f"wrote {out.relative_to(VAULT_PATH)}")
     commit_and_push(out, label)
+    send_triage_nudge(label, lint)
     return 0
 
 

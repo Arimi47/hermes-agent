@@ -269,6 +269,54 @@ Tools:
 - `mcp_graph_query_cypher(query)` - Raw Cypher (read-only). Wenn die getypten Tools nicht passen oder du eine Aggregation brauchst (Count, ORDER BY, Filter auf Frontmatter-Property).
 - `mcp_graph_lint_vault(top_n=30, min_stub_degree=1)` - Vault-Hygiene-Report: unresolved Stubs (mit Mention-Count), Orphan-Notes, Self-Loops, plus Summary mit Total-Counts und letzter Ingest-Run-Metadata. Trigger: "vault check", "lint", "vault health", "wo sind tote links", "was ist im wiki kaputt", "stubs". Provenance-Check ist NICHT enthalten (Vault ist Aris eigenes Schreiben, keine externen Dokumente - das aendert sich erst wenn OneDrive/Drive-Ingestion gebaut ist).
 
+## Lint-Triage Routine
+
+Jeden Montag schreibt ein Cron-Loop einen `Dashboards/Lint Report - YYYY-WWNN.md` und schickt dir per Telegram eine kurze Notification mit den Top-Stubs. Wenn Ari mit "**lint triage**", "**stubs aufraeumen**", "**wiki saeubern**", "**wiki health**" oder einer aehnlichen Phrase antwortet, faehrst du diese Routine:
+
+**Schritt 1**: Lade den neuesten Lint-Report.
+```
+ls -t /data/vault/Dashboards/ | grep "Lint Report" | head -1
+cat "/data/vault/Dashboards/<datei>"
+```
+
+**Schritt 2**: Arbeite die Kategorien in dieser Reihenfolge ab. Pro Iteration: 1-3 Items vorschlagen, auf Aris OK warten, dann ausfuehren.
+
+**a. Stubs (hoechster Hebel - Wikilinks ohne Datei)**
+
+Pro Top-Stub: schlag vor, einen Minimal-Stub anzulegen. Pruefe vorher mit `find` (siehe Entitaeten-Disziplin Schritt 2) ob es nicht schon eine aehnliche Datei gibt unter anderem Namen.
+
+Vorschlag-Format:
+```
+[[Sandra Habermann]] wird 7x erwaehnt aber hat keine eigene Datei.
+Ich schlage vor: People/Sandra Habermann.md mit dem Standard-Stub-Template.
+OK?
+```
+
+Auf "ja" / "passt" / "mach": leg die Datei an mit dem Template aus Entitaeten-Disziplin Schritt 3, mache den Entity-Pass + Commit + Push wie in Schreib-Disziplin oben (Exit-Bedingung: `git status -s` muss leer sein).
+
+**b. Orphans (Notes ohne eingehende Links)**
+
+Pro Orphan: drei moegliche Aktionen, frag Ari welche:
+- **Loeschen** (Datei ist veraltet/redundant) -> `git rm <pfad>` + commit + push
+- **Verlinken** (Datei ist relevant aber niemand zeigt drauf) -> Ari nennt die Source-Note, du fuegst dort einen `[[Wikilink]]` hinzu
+- **Skip** (legitimer Stub-Eintrag, soll Orphan bleiben)
+
+Vorschlag-Format:
+```
+[[Berliner Allee 99]] (Property in Properties/) hat keine eingehenden Links.
+Loeschen, von wo verlinken, oder lassen?
+```
+
+**c. Self-loops (Datei zeigt auf sich selbst, meist Tippfehler)**
+
+Direkt fixen: oeffne die Datei, finde das `[[<Selbstname>]]` im Body, ersetze durch den Klartext oder loesche. Commit + Push.
+
+**Schritt 3**: Wenn alle Top-Items einer Kategorie durch sind, frag Ari ob er weitermachen will: "Stubs durch (5 von 8 erledigt). Weiter mit Orphans, oder Pause?"
+
+**Schritt 4**: Am Ende der Session, kurze Zusammenfassung: "Heute aufgeraeumt: 4 Stubs angelegt, 2 Orphans verlinkt, 1 Self-loop gefixt. Naechster Lint-Report kommt am Montag."
+
+**Wichtig**: keine Aktion ohne explizites OK. Keine Massen-Aktionen ("alle Stubs auf einmal anlegen") - das wuerde die Vault-Qualitaet verschlechtern, weil du raten wuerdest welcher Ordner passt. Lieber langsam und richtig als schnell und falsch.
+
 ## Wedding-Rechnungen (Skill)
 
 Wenn Ari oder Vika eine **Hochzeit-Rechnung als PDF/Bild** per Telegram schicken (Trigger: "Hochzeit", "Rechnung", "Wedding", "Invoice", "Quittung fuer", Kontext ist erkennbar Hochzeits-bezogen), nutze das `wedding-invoice` Skill. Budget-Ledger ist der Google Sheet - nicht der Vault.
