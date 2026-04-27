@@ -2,19 +2,20 @@
 
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { colorFor, LABEL_COLOR, LABEL_ORDER } from '@/lib/labels';
 import { communityColor, computeCommunities, COMMUNITY_COLORS } from '@/lib/clustering';
 import DetailPanel from './DetailPanel';
 
-// Reagraph is a WebGL graph renderer with a single GraphCanvas component
-// that supports both 2D and 3D layouts via the layoutType prop. We dynamic-
-// import it (ssr: false) because it touches window/document at module load.
-// Replaced react-force-graph-2d/3d on 2026-04-26: the 3D variant suffered
-// from WebGL context-loss black-canvas crashes on this user's hardware
-// (vasturiano/3d-force-graph#194, react-three-fiber#3093).
-const GraphCanvas = dynamic(
-  () => import('reagraph').then((m) => m.GraphCanvas),
+// 2D-only after a failed experiment with reagraph (4.30) and react-force-
+// graph-3d. The 3D variant kept losing its WebGL context to a black canvas
+// on this user's hardware (vasturiano/3d-force-graph#194); reagraph never
+// rendered nodes despite the canvas mounting and the data loading, even
+// after multiple integration fixes (hex colors, camera fit, removing nested
+// data fields, omitting empty selections/actives, animated:false). 2D was
+// always stable here - it's pure Canvas2D, no WebGL context to leak.
+const ForceGraph2D = dynamic(
+  () => import('react-force-graph-2d').then((m) => m.default),
   { ssr: false },
 ) as any;
 
@@ -23,6 +24,8 @@ type Node = {
   name: string;
   label: string;
   degree: number;
+  x?: number;
+  y?: number;
 };
 type LinkType = 'MENTIONS' | 'REFERS_TO';
 type Link = {
@@ -33,78 +36,23 @@ type Link = {
 };
 type GraphData = { nodes: Node[]; links: Link[] };
 
-// Reagraph node + edge shapes - id MUST be a string. We carry the original
-// numeric id and label/degree in underscore-prefixed fields (rather than a
-// nested `data` object, which appears to confuse reagraph 4.30 under load).
-type RGEdge = {
-  id: string;
-  source: string;
-  target: string;
-  fill: string;
-  size?: number;
+const EDGE_BASE: Record<LinkType, string> = {
+  MENTIONS: 'rgba(180, 180, 180, 0.10)',
+  REFERS_TO: 'rgba(163, 177, 138, 0.20)',
 };
-
-// Reagraph passes these strings to THREE.Color, which only accepts hex / hsl /
-// css-named colors and silently strips alpha from rgba(). Using rgba here
-// produced 200+ "Alpha component will be ignored" warnings AND left the
-// canvas blank, because the broken color values cascaded through the
-// render pipeline. Hex only.
-const EDGE_FILL: Record<LinkType, string> = {
-  MENTIONS: '#5e5e5e',     // mid-gray, alpha simulated via theme.edge.opacity
-  REFERS_TO: '#7e8a6e',    // dim sage to differentiate from prose mentions
+const EDGE_HIT: Record<LinkType, string> = {
+  MENTIONS: 'rgba(251, 146, 60, 0.65)',
+  REFERS_TO: 'rgba(251, 146, 60, 0.55)',
+};
+const EDGE_DIM: Record<LinkType, string> = {
+  MENTIONS: 'rgba(180, 180, 180, 0.03)',
+  REFERS_TO: 'rgba(163, 177, 138, 0.05)',
 };
 
 const linkEnds = (l: Link): [number, number] => [
   typeof l.source === 'number' ? l.source : l.source.id,
   typeof l.target === 'number' ? l.target : l.target.id,
 ];
-
-// Theme tuned to match the existing Mission Control palette: warm dark
-// canvas, label-color-as-fill so per-node fills survive, dimming via
-// inactiveOpacity for the "select X, dim everything else" UX.
-// All color values must be hex / css-named / hsl - rgba() is parsed by
-// THREE.Color which strips alpha and emits a warning per call (was 200+
-// per render). Use the opacity / inactiveOpacity / selectedOpacity fields
-// for transparency instead.
-const HERMES_THEME = {
-  canvas: {
-    background: '#0a0a0a',
-    fog: '#0a0a0a',
-  },
-  node: {
-    fill: '#7A8C9E',
-    activeFill: '#fb923c',
-    opacity: 0.9,
-    selectedOpacity: 1,
-    inactiveOpacity: 0.18,
-    label: {
-      color: '#e6e6e6',
-      stroke: '#0a0a0a',
-      activeColor: '#fb923c',
-    },
-  },
-  edge: {
-    fill: '#5e5e5e',
-    activeFill: '#fb923c',
-    opacity: 0.55,
-    selectedOpacity: 0.9,
-    inactiveOpacity: 0.06,
-    label: {
-      color: '#888888',
-      stroke: '#0a0a0a',
-      activeColor: '#fb923c',
-      fontSize: 6,
-    },
-  },
-  ring: { fill: '#54616D', activeFill: '#fb923c' },
-  arrow: { fill: '#474B56', activeFill: '#fb923c' },
-  lasso: { border: '1px solid #fb923c', background: '#fb923c14' },
-  cluster: {
-    stroke: '#474B56',
-    opacity: 1,
-    label: { color: '#ACBAC7', stroke: '#0a0a0a' },
-  },
-};
 
 export default function Graph() {
   const router = useRouter();
@@ -113,44 +61,14 @@ export default function Graph() {
     const v = params.get('n');
     return v ? Number.parseInt(v, 10) : null;
   }, [params]);
-  const is3D = params.get('mode') === '3d';
   const colorMode = params.get('color') === 'community' ? 'community' : 'label';
 
   const [data, setData] = useState<GraphData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [hover, setHover] = useState<Node | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const graphRef = useRef<any>(null);
-
-  // Force-directed layouts spread nodes to arbitrary world coordinates and
-  // reagraph's default camera does NOT auto-fit to that bounding box. With
-  // 433 nodes / 1272 edges the layout takes ~3-5s to settle. Try repeatedly
-  // until the ref is populated and the call lands. Without this the canvas
-  // appears blank because the graph is off-screen relative to the camera.
-  useEffect(() => {
-    if (!data) return;
-    let attempts = 0;
-    const tick = () => {
-      if (!graphRef.current) {
-        if (attempts++ < 30) setTimeout(tick, 200);
-        return;
-      }
-      try {
-        graphRef.current?.centerGraph?.();
-        graphRef.current?.fitNodesInView?.();
-      } catch {
-        /* ref not yet wired */
-      }
-    };
-    const t1 = setTimeout(tick, 800);
-    const t2 = setTimeout(tick, 2500);
-    const t3 = setTimeout(tick, 5000);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-    };
-  }, [data, is3D]);
+  const fgRef = useRef<any>(null);
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +88,17 @@ export default function Graph() {
       cancelled = true;
       clearInterval(t);
     };
+  }, []);
+
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const el = wrapRef.current;
+    const ro = new ResizeObserver(() => {
+      setSize({ w: el.clientWidth, h: el.clientHeight });
+    });
+    ro.observe(el);
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
   }, []);
 
   const labelCounts = useMemo(() => {
@@ -208,74 +137,26 @@ export default function Graph() {
     return { mentions: m, refers: r };
   }, [data]);
 
-  // Selected node + 1-hop neighbour set, both as strings for Reagraph.
-  // Used as `actives` so neighbours stay bright while the rest dims.
-  const actives = useMemo(() => {
-    if (selectedId == null || !data) return [] as string[];
+  const neighbourSet = useMemo(() => {
+    if (selectedId == null || !data) return null;
     const s = new Set<number>([selectedId]);
     for (const l of data.links) {
       const [sid, tid] = linkEnds(l);
       if (sid === selectedId) s.add(tid);
       if (tid === selectedId) s.add(sid);
     }
-    return Array.from(s).map(String);
+    return s;
   }, [selectedId, data]);
 
-  const selections = useMemo(
-    () => (selectedId != null ? [String(selectedId)] : []),
-    [selectedId],
+  const setSelection = useCallback(
+    (id: number | null) => {
+      const q = new URLSearchParams(params.toString());
+      if (id == null) q.delete('n');
+      else q.set('n', String(id));
+      router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
+    },
+    [params, router],
   );
-
-  const rgNodes = useMemo(() => {
-    if (!data) return [];
-    return data.nodes.map((n) => ({
-      id: String(n.id),
-      label: n.name,
-      size:
-        n.degree >= 25 ? 14 :
-        n.degree >= 12 ? 10 :
-        n.degree >= 6 ? 8 : 6,
-      fill:
-        colorMode === 'community'
-          ? communityColor(communities?.get(n.id))
-          : colorFor(n.label),
-      // Custom fields (consumed by event handlers via `_label`/`_degree`/
-      // `_numericId`). Reagraph passes the whole node object back on click,
-      // so these stay accessible without nesting under `data` (which the
-      // earlier shape used and which appears to confuse reagraph 4.30's
-      // node iterator under heavier loads).
-      _label: n.label,
-      _degree: n.degree,
-      _numericId: n.id,
-    }));
-  }, [data, colorMode, communities]);
-
-  const rgEdges: RGEdge[] = useMemo(() => {
-    if (!data) return [];
-    return data.links.map((l, i) => {
-      const [sid, tid] = linkEnds(l);
-      return {
-        id: `e-${i}-${sid}-${tid}-${l.type}`,
-        source: String(sid),
-        target: String(tid),
-        fill: EDGE_FILL[l.type],
-      };
-    });
-  }, [data]);
-
-  const setSelection = (id: number | null) => {
-    const q = new URLSearchParams(params.toString());
-    if (id == null) q.delete('n');
-    else q.set('n', String(id));
-    router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
-  };
-
-  const toggleMode = () => {
-    const q = new URLSearchParams(params.toString());
-    if (is3D) q.delete('mode');
-    else q.set('mode', '3d');
-    router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
-  };
 
   const toggleColorMode = () => {
     const q = new URLSearchParams(params.toString());
@@ -284,54 +165,97 @@ export default function Graph() {
     router.replace(q.toString() ? `?${q.toString()}` : '/', { scroll: false });
   };
 
+  // Camera fly-to on selection.
+  useEffect(() => {
+    if (!fgRef.current || selectedId == null || !data) return;
+    const target = data.nodes.find((n) => n.id === selectedId);
+    if (!target || target.x == null || target.y == null) return;
+    fgRef.current.centerAt(target.x, target.y, 600);
+    fgRef.current.zoom(2.8, 600);
+  }, [selectedId, data]);
+
+  const linkColor = (l: Link) => {
+    const [sid, tid] = linkEnds(l);
+    if (neighbourSet) {
+      if (sid === selectedId || tid === selectedId) return EDGE_HIT[l.type];
+      return EDGE_DIM[l.type];
+    }
+    if (hover && (sid === hover.id || tid === hover.id)) {
+      return 'rgba(251, 146, 60, 0.4)';
+    }
+    return EDGE_BASE[l.type];
+  };
+
+  const linkWidth = (l: Link) => {
+    const [sid, tid] = linkEnds(l);
+    if (neighbourSet && (sid === selectedId || tid === selectedId)) return 1.4;
+    if (hover && (sid === hover.id || tid === hover.id)) return 1;
+    return 0.55;
+  };
+
+  const particleCount = (l: Link) => {
+    const [sid, tid] = linkEnds(l);
+    const hitSelected =
+      selectedId != null && (sid === selectedId || tid === selectedId);
+    const hitHover = hover != null && (sid === hover.id || tid === hover.id);
+    return hitSelected || hitHover ? 2 : 0;
+  };
+
+  const nodeColor = (n: Node) => {
+    if (selectedId === n.id) return '#fb923c';
+    const base =
+      colorMode === 'community'
+        ? communityColor(communities?.get(n.id))
+        : colorFor(n.label);
+    if (neighbourSet && !neighbourSet.has(n.id)) {
+      return base.length === 7 ? base + '26' : base; // ~0.15 alpha
+    }
+    return base;
+  };
+
   return (
     <div className="graph-wrap" ref={wrapRef}>
       {err && <div className="graph-err">{err}</div>}
-      {data && rgNodes.length > 0 && (
-        // Reagraph's GraphCanvas renders an internal Three.js canvas that
-        // needs a positioned parent with definite pixel dimensions to size
-        // correctly. height: 100% on .graph-wrap doesn't propagate cleanly
-        // through reagraph's wrapper inside a CSS grid cell, so we anchor
-        // it explicitly with absolute inset:0 (the .graph-wrap is already
-        // position: relative so this resolves to its bounds).
-        <div style={{ position: 'absolute', inset: 0 }}>
-          <GraphCanvas
-            ref={graphRef}
-            key={is3D ? '3d' : '2d'}
-            nodes={rgNodes}
-            edges={rgEdges}
-            layoutType={is3D ? 'forceDirected3d' : 'forceDirected2d'}
-            // Pass selections/actives only when populated. Empty arrays
-            // appear to put reagraph into a "nothing-is-active" mode that
-            // applies inactiveOpacity to every node.
-            {...(selections.length ? { selections } : {})}
-            {...(actives.length ? { actives } : {})}
-            theme={HERMES_THEME}
-            labelType="auto"
-            cameraMode="pan"
-            animated={false}
-            draggable
-            edgeArrowPosition="none"
-            onNodeClick={(n: any) => {
-              const numericId = n?._numericId ?? Number.parseInt(n?.id, 10);
-              if (Number.isFinite(numericId)) setSelection(numericId);
-            }}
-            onCanvasClick={() => setSelection(null)}
-            onNodePointerOver={(n: any) => {
-              if (!n) {
-                setHover(null);
-                return;
-              }
-              setHover({
-                id: n?._numericId ?? Number.parseInt(n?.id, 10),
-                name: n?.label ?? '',
-                label: n?._label ?? '',
-                degree: n?._degree ?? 0,
-              });
-            }}
-            onNodePointerOut={() => setHover(null)}
-          />
-        </div>
+      {data && size.w > 0 && (
+        <ForceGraph2D
+          ref={fgRef}
+          graphData={data}
+          width={size.w}
+          height={size.h}
+          backgroundColor="#0a0a0a"
+          nodeRelSize={3}
+          nodeVal={(n: Node) => 1 + Math.min(n.degree, 20) * 0.5}
+          nodeLabel={(n: Node) => `${n.name} · ${n.label}`}
+          nodeColor={nodeColor}
+          linkColor={linkColor}
+          linkWidth={linkWidth}
+          linkDirectionalParticles={particleCount}
+          linkDirectionalParticleWidth={0.6}
+          linkDirectionalParticleSpeed={0.004}
+          linkDirectionalParticleColor={() => '#fde68a'}
+          cooldownTicks={100}
+          d3VelocityDecay={0.3}
+          onNodeHover={(n: Node | null) => setHover(n)}
+          onNodeClick={(n: Node) => setSelection(n.id)}
+          onBackgroundClick={() => setSelection(null)}
+          nodeCanvasObjectMode={() => 'after'}
+          nodeCanvasObject={(n: Node, ctx: CanvasRenderingContext2D, scale: number) => {
+            const isSelected = selectedId === n.id;
+            const isNeighbour = neighbourSet && neighbourSet.has(n.id);
+            const show = isSelected || (isNeighbour && neighbourSet) || n.degree >= 6 || scale > 2.4;
+            if (!show) return;
+            const r = 3 + Math.min(n.degree, 20) * 0.5;
+            const fontSize = Math.max(9, 11 / scale);
+            ctx.font = `${isSelected ? 600 : 400} ${fontSize}px "Space Grotesk", ui-sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const alpha = neighbourSet && !isNeighbour ? 0.22 : 0.78;
+            ctx.fillStyle = isSelected
+              ? 'rgba(251, 146, 60, 1)'
+              : `rgba(230, 230, 230, ${alpha})`;
+            ctx.fillText(n.name, (n.x ?? 0) + r + 3, n.y ?? 0);
+          }}
+        />
       )}
       <div className="legend">
         {colorMode === 'label' ? (
@@ -384,10 +308,6 @@ export default function Graph() {
           <span className={`mode-segment${colorMode === 'community' ? ' active' : ''}`}>
             Cluster
           </span>
-        </button>
-        <button className="mode-toggle" onClick={toggleMode} title="Render mode">
-          <span className={`mode-segment${!is3D ? ' active' : ''}`}>2D</span>
-          <span className={`mode-segment${is3D ? ' active' : ''}`}>3D</span>
         </button>
       </div>
       {hover && selectedId == null && (
