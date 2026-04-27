@@ -33,15 +33,9 @@ type Link = {
 };
 type GraphData = { nodes: Node[]; links: Link[] };
 
-// Reagraph node + edge shapes. id MUST be a string. We carry the original
-// numeric id in `data.numericId` so click handlers can route back.
-type RGNode = {
-  id: string;
-  label: string;
-  fill: string;
-  size: number;
-  data: { label: string; degree: number; numericId: number };
-};
+// Reagraph node + edge shapes - id MUST be a string. We carry the original
+// numeric id and label/degree in underscore-prefixed fields (rather than a
+// nested `data` object, which appears to confuse reagraph 4.30 under load).
 type RGEdge = {
   id: string;
   source: string;
@@ -129,20 +123,33 @@ export default function Graph() {
   const graphRef = useRef<any>(null);
 
   // Force-directed layouts spread nodes to arbitrary world coordinates and
-  // reagraph's default camera does NOT auto-fit to that bounding box. Without
-  // this, a 433-node graph lays itself out off-screen relative to the camera
-  // and the canvas appears blank. Wait for the layout cooldown then fit.
+  // reagraph's default camera does NOT auto-fit to that bounding box. With
+  // 433 nodes / 1272 edges the layout takes ~3-5s to settle. Try repeatedly
+  // until the ref is populated and the call lands. Without this the canvas
+  // appears blank because the graph is off-screen relative to the camera.
   useEffect(() => {
-    if (!data || !graphRef.current) return;
-    const t = setTimeout(() => {
+    if (!data) return;
+    let attempts = 0;
+    const tick = () => {
+      if (!graphRef.current) {
+        if (attempts++ < 30) setTimeout(tick, 200);
+        return;
+      }
       try {
         graphRef.current?.centerGraph?.();
         graphRef.current?.fitNodesInView?.();
       } catch {
-        /* noop - reagraph ref not ready */
+        /* ref not yet wired */
       }
-    }, 1500);
-    return () => clearTimeout(t);
+    };
+    const t1 = setTimeout(tick, 800);
+    const t2 = setTimeout(tick, 2500);
+    const t3 = setTimeout(tick, 5000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
   }, [data, is3D]);
 
   useEffect(() => {
@@ -219,7 +226,7 @@ export default function Graph() {
     [selectedId],
   );
 
-  const rgNodes: RGNode[] = useMemo(() => {
+  const rgNodes = useMemo(() => {
     if (!data) return [];
     return data.nodes.map((n) => ({
       id: String(n.id),
@@ -232,7 +239,14 @@ export default function Graph() {
         colorMode === 'community'
           ? communityColor(communities?.get(n.id))
           : colorFor(n.label),
-      data: { label: n.label, degree: n.degree, numericId: n.id },
+      // Custom fields (consumed by event handlers via `_label`/`_degree`/
+      // `_numericId`). Reagraph passes the whole node object back on click,
+      // so these stay accessible without nesting under `data` (which the
+      // earlier shape used and which appears to confuse reagraph 4.30's
+      // node iterator under heavier loads).
+      _label: n.label,
+      _degree: n.degree,
+      _numericId: n.id,
     }));
   }, [data, colorMode, communities]);
 
@@ -287,15 +301,19 @@ export default function Graph() {
             nodes={rgNodes}
             edges={rgEdges}
             layoutType={is3D ? 'forceDirected3d' : 'forceDirected2d'}
-            selections={selections}
-            actives={actives}
+            // Pass selections/actives only when populated. Empty arrays
+            // appear to put reagraph into a "nothing-is-active" mode that
+            // applies inactiveOpacity to every node.
+            {...(selections.length ? { selections } : {})}
+            {...(actives.length ? { actives } : {})}
             theme={HERMES_THEME}
             labelType="auto"
-            cameraMode={is3D ? 'rotate' : 'pan'}
+            cameraMode="pan"
+            animated={false}
             draggable
             edgeArrowPosition="none"
             onNodeClick={(n: any) => {
-              const numericId = n?.data?.numericId ?? Number.parseInt(n?.id, 10);
+              const numericId = n?._numericId ?? Number.parseInt(n?.id, 10);
               if (Number.isFinite(numericId)) setSelection(numericId);
             }}
             onCanvasClick={() => setSelection(null)}
@@ -305,10 +323,10 @@ export default function Graph() {
                 return;
               }
               setHover({
-                id: n?.data?.numericId ?? Number.parseInt(n?.id, 10),
+                id: n?._numericId ?? Number.parseInt(n?.id, 10),
                 name: n?.label ?? '',
-                label: n?.data?.label ?? '',
-                degree: n?.data?.degree ?? 0,
+                label: n?._label ?? '',
+                degree: n?._degree ?? 0,
               });
             }}
             onNodePointerOut={() => setHover(null)}
