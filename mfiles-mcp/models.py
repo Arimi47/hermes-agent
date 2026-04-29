@@ -313,6 +313,49 @@ class GetPropertyDocsInput(PropertyIdentifierInput):
     )
 
 
+class ReadUnitContractInput(BaseModel):
+    """Input for mfiles_read_unit_contract - reads the active Vermietung incl. extracted PDF text."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    vorgang_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "ID einer Mietermeldung. Tool ermittelt automatisch die verknuepfte Einheit und "
+            "liest deren aktive Vermietung. Bequemster Weg wenn Ari im Mietermeldungs-Kontext ist."
+        ),
+        ge=1
+    )
+    unit_id: Optional[int] = Field(
+        default=None,
+        description="Direkte Einheit-ID (Alternative zu vorgang_id und unit_name).",
+        ge=1
+    )
+    unit_name: Optional[str] = Field(
+        default=None,
+        description="Einheit-Nummer/Name (z.B. 'WE03'). Erfordert property_id oder property_name."
+    )
+    property_id: Optional[int] = Field(
+        default=None,
+        description="Liegenschafts-ID (wenn unit_name verwendet wird).",
+        ge=1
+    )
+    property_name: Optional[str] = Field(
+        default=None,
+        description="Liegenschafts-Name (wenn unit_name verwendet wird, z.B. 'Mueggelstr 4')."
+    )
+    latest_only: bool = Field(
+        default=True,
+        description=(
+            "True (Standard): nur die neueste aktive Vermietung lesen. "
+            "False: alle Vermietungen der Einheit (auch historische Vormieter)."
+        )
+    )
+    extract_text: bool = Field(
+        default=True,
+        description="True (Standard): PDF/MSG-Text extrahieren. False: nur Metadaten + Doc-Liste."
+    )
+
+
 class DownloadDocInput(BaseModel):
     """Input for mfiles_download_doc."""
     model_config = ConfigDict(str_strip_whitespace=True)

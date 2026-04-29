@@ -1,6 +1,6 @@
 ---
 name: mfiles
-description: "M-Files Birnbaum-Vault Skill fuer Mietermeldungen, Angebote und Sanierungen. Nutzt mfiles_* MCP-Tools fuer Read (recap_bundle, list_vorgaenge, get_vorgang_details) und Write (set_vorgang_status, set_angebot_status, set_sanierung_status, add_vorgang_comment, vorgaenge_decide_batch). Kann Maengel freigeben (berechtigt/unberechtigt), an VMM weiterreichen (Schwarzbaum/andere Portfolios), Angebote annehmen/ablehnen, Sanierungen weiterschalten, Kommentare anhaengen. Triggers: Mietermeldung, Mangel, Maengel, Vorgang, freigeben, berechtigt, unberechtigt, aufgeschoben, in Behebung, in Abrechnung, Nachfrage, an Schwarzbaum, VMM Schwarzbaum, andere Portfolios, weiterreichen, Angebot, annehmen, ablehnen, nachverhandeln, Sanierung, Vergabe, Durchfuehrung, Abnahme, abgeschlossen, Kommentar, recap, was liegt an, offene Vorgaenge, was muss ich pruefen, lies die Mails. Nur fuer Ari (User-ID 7652652109). NICHT fuer Vika."
+description: "M-Files Birnbaum-Vault Skill fuer Mietermeldungen, Angebote, Sanierungen und Mietvertraege. Nutzt mfiles_* MCP-Tools fuer Read (recap_bundle, list_vorgaenge, get_vorgang_details, read_unit_contract mit PDF-Extraktion, get_units, get_unit_docs, get_tenants) und Write (set_vorgang_status, set_angebot_status, set_sanierung_status, add_vorgang_comment, vorgaenge_decide_batch). Kann Maengel freigeben (berechtigt/unberechtigt), an VMM weiterreichen (Schwarzbaum/andere Portfolios), Angebote annehmen/ablehnen, Sanierungen weiterschalten, Kommentare anhaengen, und Mietvertraege als PDF lesen (nicht nur Metadaten - extrahiert vollstaendigen Vertragstext fuer Fragen zu Mietbeginn, Kaution, Sondervereinbarungen, Schoenheitsreparaturen, Kuendigungsfristen). Triggers: Mietermeldung, Mangel, Maengel, Vorgang, freigeben, berechtigt, unberechtigt, aufgeschoben, in Behebung, in Abrechnung, Nachfrage, an Schwarzbaum, VMM Schwarzbaum, andere Portfolios, weiterreichen, Angebot, annehmen, ablehnen, nachverhandeln, Sanierung, Vergabe, Durchfuehrung, Abnahme, abgeschlossen, Kommentar, recap, was liegt an, offene Vorgaenge, was muss ich pruefen, lies die Mails, Mietvertrag, Vermietung, Mietzins, Kaltmiete, Warmmiete, Kaution, Mietbeginn, eingezogen, Vertragsende, Befristung, Sondervereinbarung, Schoenheitsreparaturen, Buerge, Mieterhoehung, Mieter, Vormieter. Nur fuer Ari (User-ID 7652652109). NICHT fuer Vika."
 ---
 
 # M-Files Skill (Hermes port)
@@ -29,13 +29,20 @@ Ari triagiert Vorgaenge per Telegram-Nachricht. Hermes recapt, zeigt Preview, pu
 
 **Vorgang (ObjectType 139):** Container fuer Mietermeldung oder Sanierung. Klasse 62 = Mietermeldung, Klasse 63 = Sanierung. Wichtige Properties:
 - `0` = Name/Titel
-- `33` = Kommentar (PropertyDef fuer add_comment)
 - `38/39` = Workflow / State
 - `100` = Klasse
 - `1266` = Liegenschaft (Lookup)
+- `1272` = Einheit (Lookup) - der Anker fuer Mietvertrag-Lookups
+- `1269` = Mieter (Lookup)
 - `1308` = Maengelart (VL 137: Gebaeude=9, Wohnung=11)
 
+**Kommentare** gehen nicht an PropertyDef 33 (alte Implementierung), sondern via `PUT /objects/.../comments` an den Comments-Tab des Objekts. Sichtbar in M-Files als eigener Tab, das ist was HVK liest.
+
 **Angebot (ObjectType 0 = Dokument, Klasse 17):** Handwerker-Quote. Workflow 113.
+
+**Einheit (ObjectType 132, Klasse 52):** Wohn-/Gewerbeeinheit. Property `1431` = Vermietung-Lookup, das Bindeglied zur aktiven Vermietung.
+
+**Vermietung (Klasse 57, Workflow 128):** Container pro Mietperiode. Haelt den Mietvertrag-PDF (Klasse 39), Uebergabeprotokoll (Klasse 61), evtl. Vertragsanpassungen. Eine Einheit kann ueber die Jahre mehrere Vermietungen durchlaufen haben - aktuelle = `Laufzeit_Ende` leer oder in Zukunft.
 
 Vollstaendige Property-Liste: `Documents/2026-04-10_MFILES_PROPERTY_DEFINITIONS.md` (541 Properties). REST-API-Details: `Documents/2026-04-10_MFILES_REST_API_REFERENCE.md`.
 
@@ -200,6 +207,57 @@ Falls 1 von 3 failt: Ari die Failure-Details zeigen, Frage ob nochmal versuchen 
 **Tool:** `mfiles_search(query="Graffiti", object_type=139)` - liefert Treffer-Liste mit IDs und Titeln.
 
 Bei Ambiguitaet: Liste an Ari zeigen, nach Klarstellung fragen. Niemals raten.
+
+## Workflow E - Mietvertrag lesen (PDF-Inhalt, nicht nur Metadaten)
+
+**Trigger:** Ari fragt etwas was im Vertrag steht, z.B.:
+- "wann ist [Mieter] eingezogen?" / "Mietbeginn von Plieth?"
+- "was zahlt der Mieter?" / "Mietzins" / "Kaltmiete" / "Warmmiete"
+- "wie hoch ist die Kaution?" / "Kautionskonto"
+- "wann laeuft der Vertrag aus?" / "Befristung" / "Kuendigungsfrist"
+- "Sondervereinbarungen?" / "Schoenheitsreparaturen" / "Nebenkosten-Vorauszahlung"
+- "was steht im Mietvertrag von Mueggelstr 4 WE03?"
+- "lies mir den Vertrag von [Adresse]"
+- "Buerge?" / "Mieterhoehung moeglich?"
+
+Wichtig: das sind Fragen ueber den **PDF-Inhalt**, nicht ueber M-Files-Properties. M-Files hat zwar Vertragsabschluss-Datum als Property, aber Sondervereinbarungen, exakte Klauseln, handgeschriebene Anmerkungen stehen NUR in der PDF.
+
+**Tool:** `mfiles_read_unit_contract(...)` - liest die aktive Vermietung **inkl. extrahiertem PDF-Text** in einem Call.
+
+### Standard-Pfad: aus einer Mietermeldung heraus
+
+Wenn Ari gerade in einem Vorgang-Recap ist und eine Vertragsfrage stellt: einfach die `vorgang_id` durchreichen, das Tool ermittelt automatisch die verlinkte Einheit.
+
+```
+mfiles_read_unit_contract(vorgang_id=5262)
+```
+
+Returns: Einheit-Info + neueste aktive Vermietung mit Properties (Vertragsabschluss, Laufzeit_Beginn, Laufzeit_Ende) + alle Dokumente der Vermietung (Mietvertrag, Uebergabeprotokoll, etc.) mit **vollstaendig extrahiertem PDF-Text**. Hermes kann dann jede Vertragsfrage aus dem Text beantworten.
+
+### Standalone-Pfad: ohne Mietermeldungs-Kontext
+
+Wenn Ari direkt fragt "lies den Mietvertrag von Mueggelstr 4 WE03": entweder Adresse + Einheit, oder direkte unit_id wenn schon bekannt.
+
+```
+mfiles_read_unit_contract(unit_name="WE03", property_name="Mueggelstr 4")
+mfiles_read_unit_contract(unit_id=12345)
+```
+
+### Historische Vertraege (Vorvermieter)
+
+Default ist `latest_only=True` - nur die aktive Vermietung. Wenn Ari nach Vorvermietern fragt ("wie war die Miete beim Schmidt vor 2020?"): `latest_only=False` setzen, dann kommen alle historischen Vermietungen zurueck. Hermes filtert auf den passenden Mieter.
+
+```
+mfiles_read_unit_contract(vorgang_id=5262, latest_only=False)
+```
+
+### Antwort-Format
+
+Beantworte Aris Frage **in Klartext mit Zitat aus dem Vertragstext**, nicht nur ein Snippet. Beispiel:
+
+> Plieth ist am 1. April 2018 eingezogen. Steht in §2 des Vertrags: "Das Mietverhaeltnis beginnt am 01.04.2018 und laeuft auf unbestimmte Zeit." Vorher gab es eine Schluesseluebergabe am 28. Maerz - in §11 als Sonderregelung erwaehnt.
+
+So sieht Ari sofort woher die Info kommt und kann die PDF in M-Files nachschlagen wenn er zweifelt.
 
 ## Status-Namen Quick-Reference
 

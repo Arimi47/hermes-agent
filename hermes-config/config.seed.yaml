@@ -94,4 +94,9 @@ mcp_servers:
         - mfiles_vorgaenge_decide_batch
         - mfiles_search
         - mfiles_get_view_items
+        # Mietvertrag- und Einheits-Lookups (Workflow F im mfiles-Skill)
+        - mfiles_read_unit_contract
+        - mfiles_get_units
+        - mfiles_get_unit_docs
+        - mfiles_get_tenants
 

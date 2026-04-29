@@ -79,7 +79,7 @@ from models import (
     # Write tool input models
     SetVorgangStatusInput, SetAngebotStatusInput,
     SetSanierungStatusInput, AddVorgangCommentInput,
-    GetViewItemsInput,
+    GetViewItemsInput, ReadUnitContractInput,
     # Status maps
     MIETERMELDUNG_STATUS_MAP, ANGEBOT_STATUS_MAP, SANIERUNG_STATUS_MAP,
 )
@@ -2319,6 +2319,180 @@ async def mfiles_get_vorgang_documents(params: GetVorgangDocumentsInput) -> str:
     )
 
     return result.model_dump_json(indent=2)
+
+
+def _extract_doc_text(content: bytes, extension: str) -> str:
+    """Extract plaintext from a downloaded document. Mirrors the inline logic
+    in mfiles_get_vorgang_documents so PDF/MSG payloads land as text Hermes
+    can reason over."""
+    ext = (extension or '').lower()
+    if ext == 'pdf':
+        try:
+            import PyPDF2, io
+            reader = PyPDF2.PdfReader(io.BytesIO(content))
+            return '\n\n'.join((p.extract_text() or '') for p in reader.pages)
+        except ImportError:
+            try:
+                import pdfplumber, io
+                with pdfplumber.open(io.BytesIO(content)) as pdf:
+                    return '\n\n'.join((p.extract_text() or '') for p in pdf.pages)
+            except ImportError:
+                return "[PDF - PyPDF2/pdfplumber nicht installiert]"
+        except Exception as e:
+            return f"[Fehler bei PDF-Extraktion: {e}]"
+    if ext in ('txt', 'csv', 'xml', 'json', 'html', 'htm'):
+        try:
+            return content.decode('utf-8')
+        except UnicodeDecodeError:
+            return content.decode('latin-1', errors='replace')
+    if ext == 'msg':
+        try:
+            import extract_msg, io
+            msg = extract_msg.openMsg(io.BytesIO(content))
+            parts = []
+            if msg.sender: parts.append(f"Von: {msg.sender}")
+            if msg.subject: parts.append(f"Betreff: {msg.subject}")
+            if msg.date: parts.append(f"Datum: {msg.date}")
+            parts.append("")
+            parts.append((msg.body or "").strip())
+            return "\n".join(parts)
+        except ImportError:
+            return "[MSG - extract-msg nicht installiert]"
+        except Exception as e:
+            return f"[Fehler bei MSG-Extraktion: {e}]"
+    return f"[Binaerdatei: {extension}, {len(content)} bytes]"
+
+
+@mcp.tool(
+    name="mfiles_read_unit_contract",
+    annotations={
+        "title": "Mietvertrag lesen (mit PDF-Text)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def mfiles_read_unit_contract(params: ReadUnitContractInput) -> str:
+    """Liest die aktive Vermietung einer Einheit inkl. extrahiertem Mietvertrag-PDF-Text.
+
+    Wann verwenden: Ari fragt etwas was im Mietvertrag steht - Mietbeginn, Kaution,
+    Sondervereinbarungen, Schoenheitsreparaturen, Kuendigungsfristen, etc. PDF-Text
+    landet im Response, Hermes kann beliebige Fragen daran beantworten.
+
+    Standard-Pfad: Ari ist gerade in einer Mietermeldung -> vorgang_id uebergeben.
+    Tool ermittelt selbststaendig die verlinkte Einheit und liest deren neueste
+    Vermietung.
+
+    Returns:
+        JSON mit Einheits-Info, Vermietungs-Properties (Vertragsabschluss,
+        Laufzeit_Beginn, Laufzeit_Ende), und allen Dokumenten der Vermietung
+        mit extrahiertem Plaintext.
+    """
+    client = await get_client()
+
+    # 1. Resolve unit_id from one of the three input paths
+    unit_id = params.unit_id
+
+    if not unit_id and params.vorgang_id:
+        type_id = await client._get_vorgang_type_id() or 139
+        details = await client.get_vorgang_details(params.vorgang_id, include_documents=False)
+        if not details:
+            return f"Vorgang {params.vorgang_id} nicht gefunden."
+        for lo in details.get('linked_objects', []):
+            if lo.get('object_type') == 132:
+                unit_id = lo.get('id')
+                break
+        if not unit_id:
+            return (
+                f"Vorgang {params.vorgang_id} hat keine verlinkte Einheit "
+                f"(linked_units: {details.get('linked_units', [])})."
+            )
+
+    if not unit_id and params.unit_name:
+        prop_id, _ = await resolve_property(params.property_id, params.property_name)
+        if prop_id is None:
+            return "Liegenschaft nicht gefunden. Bitte property_id oder property_name angeben."
+        units = await client.get_property_units(prop_id)
+        for u in units:
+            if (params.unit_name.lower() in str(u.get('unit_number', '')).lower()
+                    or params.unit_name.lower() in str(u.get('unit_name', '')).lower()):
+                unit_id = u.get('id')
+                break
+        if not unit_id:
+            return f"Einheit '{params.unit_name}' in Liegenschaft nicht gefunden."
+
+    if not unit_id:
+        return "Bitte vorgang_id, unit_id oder unit_name (mit property) angeben."
+
+    # 2. Get unit context
+    unit_info = await client._get_unit_details(unit_id) or {}
+
+    # 3. Get all Vermietungen for this Einheit (filtered via Property 1431)
+    contracts = await client.get_unit_contracts(unit_id)
+
+    if not contracts:
+        return json.dumps({
+            'unit_id': unit_id,
+            'unit_name': unit_info.get('unit_name', ''),
+            'unit_number': unit_info.get('unit_number', ''),
+            'tenant': unit_info.get('tenant', ''),
+            'contracts': [],
+            'message': "Keine Vermietung an dieser Einheit. Pruefe ob Einheit leer steht oder ob das Vermietungs-Lookup (Property 1431) fehlt."
+        }, ensure_ascii=False, indent=2)
+
+    # 4. Filter for newest active if latest_only
+    if params.latest_only and len(contracts) > 1:
+        from datetime import date
+        today_iso = date.today().isoformat()
+        active = [c for c in contracts if not c.get('end_date') or c.get('end_date') >= today_iso]
+        pool = active if active else contracts
+        pool = sorted(pool, key=lambda c: (c.get('start_date') or c.get('contract_date') or ''), reverse=True)
+        contracts = pool[:1]
+
+    # 5. Extract PDF text for each document in each contract
+    out_contracts = []
+    for c in contracts:
+        c_data = {
+            'id': c.get('id'),
+            'name': c.get('name', ''),
+            'contract_date': c.get('contract_date'),
+            'start_date': c.get('start_date'),
+            'end_date': c.get('end_date'),
+            'documents': []
+        }
+        for doc in c.get('documents', []):
+            d_data = {
+                'file_id': doc.get('file_id'),
+                'name': doc.get('name', ''),
+                'extension': doc.get('extension', ''),
+                'size_bytes': doc.get('size_bytes', 0),
+                'object_type': doc.get('object_type', 0),
+                'object_id': doc.get('object_id', c.get('id')),
+            }
+            if params.extract_text and doc.get('file_id') is not None:
+                content, file_info = await client.download_file(
+                    int(d_data['object_type']),
+                    int(d_data['object_id']),
+                    int(d_data['file_id']),
+                )
+                if content is None:
+                    d_data['error'] = file_info.get('error', 'Download failed')
+                else:
+                    d_data['text_content'] = _extract_doc_text(content, d_data['extension'])
+            c_data['documents'].append(d_data)
+        out_contracts.append(c_data)
+
+    response = {
+        'unit_id': unit_id,
+        'unit_name': unit_info.get('unit_name', ''),
+        'unit_number': unit_info.get('unit_number', ''),
+        'tenant': unit_info.get('tenant', ''),
+        'latest_only': params.latest_only,
+        'contracts_returned': len(out_contracts),
+        'contracts': out_contracts,
+    }
+    return json.dumps(response, ensure_ascii=False, indent=2)
 
 
 # =============================================================================
