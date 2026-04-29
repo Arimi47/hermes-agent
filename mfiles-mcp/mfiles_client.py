@@ -520,17 +520,20 @@ class MFilesClient:
         return result
 
     async def add_comment(self, object_type: int, object_id: int, comment: str) -> bool:
-        """Add a comment to an M-Files object using POST (not PUT) to preserve existing properties."""
+        """Add a comment to an M-Files object's Comments thread via PUT /comments.
+
+        Uses the dedicated comments endpoint so the entry shows up in the object's
+        Comments tab (which HVK and operations actually read), not as a hidden
+        PropertyDef 33 update.
+        """
         await self.ensure_authenticated()
-        properties = [{"PropertyDef": 33, "TypedValue": {"DataType": 1, "Value": comment}}]
-        endpoint = f'/objects/{object_type}/{object_id}/latest/properties'
-        # Use POST instead of PUT: POST only overwrites sent properties, PUT replaces ALL
-        result = await self.post_json(endpoint, json_data=properties)
-        if result is not None:
-            logger.info(f"Comment added: ObjType={object_type} ID={object_id}")
+        endpoint = f'/objects/{object_type}/{object_id}/latest/comments'
+        result = await self.put_with_details(endpoint, json_data=comment)
+        if result.get('ok'):
+            logger.info(f"Comment added to Comments-Thread: ObjType={object_type} ID={object_id}")
             return True
         else:
-            logger.error(f"Failed to add comment: ObjType={object_type} ID={object_id}")
+            logger.error(f"Failed to add comment: ObjType={object_type} ID={object_id} Error={result.get('error')}")
             return False
 
     async def get_object_title(self, object_type: int, object_id: int) -> str:
