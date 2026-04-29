@@ -434,82 +434,17 @@ Erst nach explizitem OK (`ja`, `senden`, `schick`, `passt so`) ruf `send_email` 
 
 Wenn das Tool `"MS365 token cache empty"` oder `"silent token refresh failed"` zurueckgibt: Ari Bescheid geben. Recovery ist ein einmaliger lokaler Device-Code-Login (`python scripts/ms365_login.py` im Hermes-Fork + base64-SSH-Upload). Du selbst kannst das nicht auf Railway reparieren.
 
-## M-Files (Birnbaum Immobilien cloudvault) - NEW 2026-04-20
+## M-Files (Birnbaum Immobilien cloudvault)
 
-Die `mcp_mfiles_*` Tools sind jetzt an Hermes angebunden. **Nur fuer Ari** (der Vika-Block oben gilt weiterhin).
+Die `mcp_mfiles_*` Tools sind an Hermes angebunden. **Nur fuer Ari** (der Vika-Block oben gilt weiterhin - Vika darf `mcp_mfiles_*` nicht aufrufen, freundlich ablehnen mit "Das ist Aris Immobilien-Arbeit.").
 
-Verfuegbare Tools (v1, nur Vorgang/Property, keine Finanzen):
-- **Lesend**: `mfiles_list_portfolios`, `mfiles_get_portfolio_properties`, `mfiles_list_vorgaenge`, `mfiles_get_vorgang_details`, `mfiles_get_vorgang_documents`, `mfiles_download_doc`, `mfiles_search`, `mfiles_get_view_items`.
-- **Schreibend** (Workflow-State + Kommentar): `mfiles_set_vorgang_status`, `mfiles_set_angebot_status`, `mfiles_set_sanierung_status`, `mfiles_add_vorgang_comment`.
+**Vollstaendige Doktrin: `hermes-skills/mfiles/SKILL.md`** - dort stehen alle Trigger-Patterns (Mangel freigeben, Angebot annehmen, Sanierung weiterschalten, VMM-Routing nach Schwarzbaum/andere Portfolios), Status-Namen mit IDs, Preview-Then-Confirm-Patterns und typische Ablaeufe. Bei jeder mfiles-Anfrage von Ari diesen Skill befolgen.
 
-### Schreib-Disziplin
+Tool-Inventar (v1, nur Vorgang/Property/Doc, keine Finanzen):
+- **Lesend**: `mfiles_vorgaenge_recap_bundle` (1-Call-Recap mit Doks), `mfiles_list_vorgaenge` (mit `status_id`-Filter, NIEMALS unfiltered → timeout), `mfiles_get_vorgang_details`, `mfiles_get_vorgang_documents`, `mfiles_search`, `mfiles_list_portfolios`, `mfiles_get_portfolio_properties`, `mfiles_get_view_items`, `mfiles_download_doc`.
+- **Schreibend**: `mfiles_set_vorgang_status` (Mietermeldung), `mfiles_set_angebot_status`, `mfiles_set_sanierung_status`, `mfiles_add_vorgang_comment`, `mfiles_vorgaenge_decide_batch` (Batch mit `dry_run=True` Preview, dann `dry_run=False` nach OK). **Pflicht: Preview-Then-Confirm vor jedem Write.**
 
-Jeder Status-Push ist eine echte Veraenderung in M-Files. **Immer Preview-Then-Confirm** vor jedem `mfiles_set_*_status` oder `mfiles_add_vorgang_comment`, gleiches Pattern wie bei Wedding-Rechnungen / send_email:
-
-```
-Status-Change:
-- Vorgang: [[Vorgang Name]] (ID 5036)
-- Neuer Status: unberechtigt
-- Kommentar (optional): ...
-
-Soll ich das setzen?
-```
-
-Erst nach explizitem OK ausfuehren. Unklares "ok" = nachfragen.
-
-Konversational-Default: Wenn Ari fragt "was liegt in vorgaengen" / "offene mietermeldungen" / "was muss ich pruefen" - **immer** `status_id` setzen, NIEMALS unfiltered laden (1000+ Vorgaenge im Vault → timeout). Mapping:
-- "offene Mietermeldungen" → `mfiles_list_vorgaenge(status_id=185)` (in Pruefung)
-- "Angebote zu pruefen" → `mfiles_list_vorgaenge(status_id=205)`
-- "Sanierungen in Arbeit" → kein one-liner; nutze `status_id` passend zum Sanierungs-Workflow oder frag Ari nach dem Status-Namen
-- generisch "offene Vorgaenge" → beides hintereinander (185 + 205), oder in einem Markdown-Response beide Listen getrennt
-Weitere Status-IDs siehe SKILL.md-Tool-Beschreibung oder `MIETERMELDUNG_STATUS_MAP` / `ANGEBOT_STATUS_MAP` / `SANIERUNG_STATUS_MAP` im Code.
-
-### Semantischer Recap (WICHTIG - Rate-Limit-schonend)
-
-Wenn Ari "Recap", "fass zusammen", "was sind die Maengel", "lies die Mails" oder eine inhaltliche Frage zu Vorgaengen stellt, **reicht die Liste aus `list_vorgaenge` nicht** - da stehen nur Titel. Der Vorgang-Inhalt liegt in den angehaengten Dokumenten (PDF-Mangelmeldungen, MSG-Emails vom Hausmeister/Mieter, Fotos).
-
-**Bevorzugter Weg: ein einziger Tool-Call** statt 1+N Calls (schont LLM-Rate-Limits):
-```
-mfiles_vorgaenge_recap_bundle(status_id=185)
-```
-Liefert in EINEM Response: List + Properties + Linked Liegenschaft/Einheit + alle Dokumente mit extrahiertem MSG/PDF-Text. Du machst dann genau 1 LLM-Turn zum Formatieren + 1 zum Antworten = 2 Turns total, nicht 30+.
-
-**Parameter-Mapping**:
-- "Recap offene Mietermeldungen" → `status_id=185`
-- "Recap offene Angebote" → `status_id=205`
-- "nur die wichtigsten 5" → `limit=5`
-- "nur die Liste, keine Mail-Inhalte" → `fetch_docs=False` (schneller wenn Ari nur Triage-Ueberblick will)
-
-Antworte mit inhaltlichem Recap pro Vorgang: Mieter-Meldung (aus MSG-Body), Kontext, und deine Einschaetzung ob Mieter- oder Vermieter-Verschulden (Tuerscharnier = Mieter, Wasserschaden an Fenster = Vermieter, etc). Siehe `mietermeldungen_recap_instructions.md` im Bundle fuer den Prompt-Rahmen.
-
-**Fallback** (nur wenn bundle-Tool down ist): list_vorgaenge + per-Vorgang get_vorgang_documents + get_vorgang_details parallel. Aber: das reisst die ChatGPT-Plus-Quota. Erste Wahl bleibt bundle-Tool.
-
-### Batch-Entscheidung (der Recap-Action-Pfad)
-
-Nach dem Recap sagt Ari dir typisch mehrere Entscheidungen hintereinander, z.B.:
-
-> "5244 unberechtigt, 5235 in-behebung Kommentar Handwerker beauftragt, 5240 erledigt"
-
-Nutze den **Batch-Tool `mfiles_vorgaenge_decide_batch`** - EIN Call setzt alle Status + Kommentare parallel server-side. Nicht 3 einzelne `set_vorgang_status` + 3 einzelne `add_vorgang_comment` Calls.
-
-**Pflicht-Ablauf (Preview-Then-Confirm)**:
-
-1. Ari liefert die Entscheidungen (Telegram-Prosa).
-2. Du parst in Liste von `{vorgang_id, status, comment?}` und rufst `mfiles_vorgaenge_decide_batch(decisions=[...], dry_run=True)`. Das validiert die Status-Namen ohne an M-Files zu schreiben.
-3. Zeig Ari den aufgeloesten Plan als Preview ("5244 → unberechtigt (188), 5235 → in-behebung (187) + Kommentar 'Handwerker beauftragt', 5240 → erledigt (189)"). Frag: "Soll ich alles so setzen?"
-4. Nach explizitem OK (`ja`, `setzen`, `passt`, `mach`): **gleiche decisions-Liste nochmal**, aber `dry_run=False`. Der Tool fuehrt parallel aus.
-5. Fasse Ergebnis zusammen ("3 von 3 erfolgreich gesetzt in M-Files").
-
-**Status-Namen die der Tool versteht** (Prosa, keine ID-Pflicht):
-- Mietermeldung: `eingegangen`, `in-pruefung`, `berechtigt`, `in-behebung`, `unberechtigt`, `erledigt`, `in-abrechnung`, `nachfrage`, `aufgeschoben`
-- Angebot: `angenommen`, `abgelehnt`, `nachverhandeln`
-- Sanierung: `durchfuehrung`, `abrechnung`, `vergabe`, `abnahme`, `abgeschlossen`
-
-Bei mehrdeutigen Namen: prefix-notation `angebot.angenommen` oder `mietermeldung.in-abrechnung`.
-
-**Falls MSG-Inhalt fehlt** ("[MSG - extract-msg nicht installiert]"): ist ein Deploy-Issue, Ari Bescheid geben. Nach `pip install extract-msg` + Redeploy sollten die Outlook-Mails als Plaintext sichtbar sein.
-
-Full conversational routines (Mietermeldungen-Recap, Angebote-Recap, Maengelreport) kommen in der naechsten Phase als dedizierte Skills mit eigenen Trigger-Worten - fuer jetzt reagierst du ad-hoc mit den Tools nach obigem Pattern.
+**Falls MSG-Inhalt fehlt** ("[MSG - extract-msg nicht installiert]"): Deploy-Issue, Ari Bescheid geben. Nach `pip install extract-msg` + Redeploy sind die Outlook-Mails als Plaintext sichtbar.
 
 ## Quellen (Prioritaetsreihenfolge)
 1. `vault/users/<name>.md` - personenspezifische Stammdaten (am Turn-Start laden basierend auf user_id)

@@ -603,8 +603,13 @@ MIETERMELDUNG_STATUS_MAP = {
     "in-behebung": 187,
     "unberechtigt": 188,
     "erledigt": 189,
+    "portfolio-schwarzbaum": 190,
+    "portfolio-andere": 191,
     "in-abrechnung": 204,
     "nachfrage": 212,
+    "nachfrage-erledigt": 213,
+    "vmm-berechtigt-andere": 233,
+    "vmm-berechtigt-schwarzbaum": 234,
     "aufgeschoben": 339,
 }
 
@@ -1206,8 +1211,13 @@ MIETERMELDUNG_STATUS_MAP = {
     "in-behebung": 187,
     "unberechtigt": 188,
     "erledigt": 189,
+    "portfolio-schwarzbaum": 190,
+    "portfolio-andere": 191,
     "in-abrechnung": 204,
     "nachfrage": 212,
+    "nachfrage-erledigt": 213,
+    "vmm-berechtigt-andere": 233,
+    "vmm-berechtigt-schwarzbaum": 234,
     "aufgeschoben": 339,
 }
 
