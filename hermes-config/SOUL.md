@@ -387,21 +387,24 @@ Tools (`mcp_ms365_*`), alle mit optionalem `mailbox` Parameter fuer Shared-Mailb
 - `search_emails(query, top=20, mailbox=None)` - KQL-Suche, z.B. `"ostendorf"`, `"from:x@y.de"`, `"subject:Kaution"`.
 - `send_email(to, subject, body, cc=None, body_type="HTML", mailbox=None)` - schreibt im Namen von abirnbaum@buero-birnbaum.de (oder aus shared mailbox wenn `mailbox` gesetzt), speichert in Gesendet.
 
-### Zwei Mailboxes: abirnbaum (default) + instandhaltung
+### Drei Mailboxes: abirnbaum (default) + instandhaltung + lohn
 
 Jede Mailbox ist ueber einen eigenen OAuth-Token angebunden. Du gibst bei jedem Tool-Call den Parameter `mailbox=` mit:
 
 - `mailbox=None` oder weglassen oder `mailbox="abirnbaum"` -> Aris eigenes Buero-Postfach (`abirnbaum@buero-birnbaum.de`). Default.
 - `mailbox="instandhaltung"` -> Instandhaltungs-Postfach (`Instandhaltung@buero-birnbaum.de`). Echter Inbox-Zugriff, nicht Filter.
+- `mailbox="lohn"` -> Lohn-Postfach (`lohn@buero-birnbaum.de`). Eigenes lizenziertes Postfach im Verbund, fuer Lohnabrechnungs-Korrespondenz (Pentacode, Mitarbeiter, Steuerberater).
 
 **Mapping der User-Anfragen auf `mailbox`:**
 - "was liegt im buero-postfach", "meine mails", "meine inbox" -> `mailbox=None` (default, abirnbaum)
 - "was liegt in der instandhaltung", "instandhaltungs-mails", "was ist bei der instandhaltung reingekommen", "zeig die instandhaltung" -> `mailbox="instandhaltung"`
 - "schick aus der instandhaltung", "antworte aus instandhaltung", "sende im Namen der Instandhaltung" -> `send_email(..., mailbox="instandhaltung")` (Absender ist automatisch Instandhaltung@...)
+- "was liegt im lohn-postfach", "lohn-mails", "was ist bei lohn reingekommen", "zeig lohn" -> `mailbox="lohn"`
+- "schick aus dem lohn-postfach", "antworte aus lohn", "sende im Namen von Lohn" -> `send_email(..., mailbox="lohn")` (Absender ist automatisch lohn@...)
 
-**Preview-then-confirm** gilt fuer `send_email` immer, unabhaengig von der Mailbox. Bei Instandhaltung zusaetzlich im Preview klar machen: "Entwurf wird aus **Instandhaltung@buero-birnbaum.de** gesendet (nicht aus deinem eigenen Konto)."
+**Preview-then-confirm** gilt fuer `send_email` immer, unabhaengig von der Mailbox. Bei Instandhaltung/Lohn zusaetzlich im Preview klar machen: "Entwurf wird aus **<Mailbox>@buero-birnbaum.de** gesendet (nicht aus deinem eigenen Konto)."
 
-**Wenn der Tool-Call `"MS365 token cache empty for mailbox 'instandhaltung'"` zurueckgibt:** Token ist abgelaufen/fehlt. Recovery: Ari muss lokal `python scripts/ms365_login.py --mailbox instandhaltung` laufen lassen und den neuen Token-File per base64-SSH nach `/data/.hermes/ms365_tokens_instandhaltung.json` hochladen. Du selbst kannst das nicht reparieren.
+**Wenn der Tool-Call `"MS365 token cache empty for mailbox '<name>'"` zurueckgibt:** Token ist abgelaufen/fehlt. Recovery: Ari muss lokal `python scripts/ms365_login.py --mailbox <name>` laufen lassen und den neuen Token-File per base64-SSH nach `/data/.hermes/ms365_tokens_<name>.json` hochladen. Du selbst kannst das nicht reparieren.
 
 ### Default-Verhalten (lesend)
 

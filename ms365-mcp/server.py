@@ -35,6 +35,7 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/data/.hermes"))
 MAILBOXES: dict[str, Path] = {
     "abirnbaum": HERMES_HOME / "ms365_tokens.json",
     "instandhaltung": HERMES_HOME / "ms365_tokens_instandhaltung.json",
+    "lohn": HERMES_HOME / "ms365_tokens_lohn.json",
 }
 DEFAULT_MAILBOX = "abirnbaum"
 

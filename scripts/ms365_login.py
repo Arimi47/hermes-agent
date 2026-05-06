@@ -59,10 +59,12 @@ REDIRECT_URI = f"http://{REDIRECT_HOST}:{REDIRECT_PORT}/callback"
 MAILBOX_HINTS: dict[str, str] = {
     "abirnbaum": "abirnbaum@buero-birnbaum.de",
     "instandhaltung": "Instandhaltung@buero-birnbaum.de",
+    "lohn": "lohn@buero-birnbaum.de",
 }
 OUT_NAMES: dict[str, str] = {
     "abirnbaum": "ms365_tokens.json",
     "instandhaltung": "ms365_tokens_instandhaltung.json",
+    "lohn": "ms365_tokens_lohn.json",
 }
 
 
