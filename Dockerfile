@@ -6,8 +6,11 @@ RUN apt-get update && \
         poppler-utils tesseract-ocr tesseract-ocr-heb tesseract-ocr-deu && \
     rm -rf /var/lib/apt/lists/*
 
-# Install hermes-agent as a package (gives us the `hermes` CLI entry point)
-RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent && \
+# Install hermes-agent as a package (gives us the `hermes` CLI entry point).
+# Pinned to an upstream tag so rebuilds are reproducible. Bumping HERMES_REF
+# busts this layer's Docker cache and pulls the new release on next Railway build.
+ARG HERMES_REF=v2026.4.30
+RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent && \
     cd /tmp/hermes-agent && \
     uv pip install --system --no-cache -e ".[all]" && \
     rm -rf /tmp/hermes-agent/.git
