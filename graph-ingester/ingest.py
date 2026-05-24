@@ -176,7 +176,7 @@ def yaml_edges(tx, src_name: str, props: dict) -> int:
                 """
                 MATCH (src {name: $src_name})
                 MATCH (tgt {name: $tgt_name})
-                WHERE id(src) <> id(tgt)
+                WHERE elementId(src) <> elementId(tgt)
                 MERGE (src)-[r:REFERS_TO {via: $via}]->(tgt)
                 RETURN count(r) AS n
                 """,

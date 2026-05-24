@@ -105,6 +105,10 @@ done
 if [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [ -n "${OBSIDIAN_VAULT_GITHUB_TOKEN:-}" ]; then
     AUTHED_URL="${OBSIDIAN_VAULT_REPO_URL/https:\/\//https:\/\/x-access-token:${OBSIDIAN_VAULT_GITHUB_TOKEN}@}"
     if [ -d /data/vault/.git ]; then
+        # Token-Rotation: bei jedem Boot remote URL refreshen, sonst bleibt
+        # der initial-clone-Token in .git/config gepinnt und alle Pushs
+        # scheitern still nachdem der Token rotated wurde (Incident 2026-05-24).
+        git -C /data/vault remote set-url origin "$AUTHED_URL"
         git -C /data/vault pull --rebase --autostash 2>&1 | sed 's/^/[vault-pull] /' \
             || git -C /data/vault rebase --abort 2>&1 | sed 's/^/[vault-pull] /' \
             || true
