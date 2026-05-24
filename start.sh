@@ -1,6 +1,27 @@
 #!/bin/bash
 set -e
 
+# Fork-bomb guard. Incident 2026-05-24: hermes-agent ist komplett ausgefallen
+# weil der Railway-Cgroup PIDs geleakt hat (Gateway-Crash-Loop, MCP-Subprozesse
+# wurden nicht gereapt). Diese 3 Zeilen sind die Verteidigung dagegen:
+#   - ulimit -u 2048: hartes Limit pro user-process tree, damit kein einzelner
+#     Spawn-Burst die Cgroup-pids.max sprengt.
+#   - set -m + EXIT trap: stellt sicher dass Background-Loops (vault sync,
+#     graph ingester, lint report) bei Container-Stop sauber gekillt werden,
+#     statt als Zombies hinter Cgroup-Wechseln zurueckzubleiben.
+#   - Early-exit Probe: wenn beim Boot schon > 1500 PIDs in /proc liegen,
+#     ist die Cgroup bereits geleakt; weiterstarten wuerde nur den Crash-Loop
+#     verlaengern. Lieber sauber failen und manuell triagieren.
+ulimit -u 2048 || true
+set -m
+trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+
+PID_USAGE=$(ls /proc 2>/dev/null | grep -c '^[0-9]' || echo 0)
+if [ "$PID_USAGE" -gt 1500 ]; then
+    echo "[start] ABORT: $PID_USAGE PIDs already in use - cgroup likely leaked. Manual triage needed (railway redeploy reicht nicht, evtl. fresh rebuild + Support-Ticket)." >&2
+    exit 1
+fi
+
 mkdir -p /data/.hermes/sessions /data/.hermes/skills /data/.hermes/workspace /data/.hermes/pairing
 mkdir -p /data/wedding-invoices
 

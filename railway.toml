@@ -7,4 +7,7 @@ startCommand = "/app/start.sh"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 10
+# 3 statt 10. Incident 2026-05-24: 10 Retries akkumulieren bei Crash-Loop
+# zuviele geleakte PIDs in der Railway-Cgroup, bis die ganze pids.max voll
+# ist und keine neuen Container mehr forken koennen.
+restartPolicyMaxRetries = 3
