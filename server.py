@@ -297,9 +297,14 @@ class Gateway:
         async for raw in self.proc.stdout:
             line = ANSI_ESCAPE.sub("", raw.decode(errors="replace").rstrip())
             self.logs.append(line)
+            # Mirror to parent stdout so Railway logs capture gateway output
+            # (admin-UI deque alone makes primary-model-failed invisible in ops).
+            print(f"[gw] {line}", flush=True)
         if self.state == "running":
             self.state = "error"
-            self.logs.append(f"[error] Gateway exited (code {self.proc.returncode})")
+            msg = f"[error] Gateway exited (code {self.proc.returncode})"
+            self.logs.append(msg)
+            print(f"[gw] {msg}", flush=True)
 
     def status(self) -> dict:
         uptime = int(time.time() - self.started_at) if self.started_at and self.state == "running" else None
