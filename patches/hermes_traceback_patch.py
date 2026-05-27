@@ -21,7 +21,9 @@ if not TARGET.exists():
     print(f"[patch] target not found: {TARGET}", file=sys.stderr)
     sys.exit(1)
 
-src = TARGET.read_text(encoding="utf-8")
+# Normalize line endings so a CRLF-checked-out patch file still matches
+# the LF-source from upstream's GitHub tarball.
+src = TARGET.read_text(encoding="utf-8").replace("\r\n", "\n")
 orig = src
 
 # Patch 1: the single-line `logging.error` for non-retryable client errors.
@@ -30,24 +32,29 @@ REPL_1 = 'logging.error(f"{self.log_prefix}Non-retryable client error: {api_erro
 
 # Patch 2: the multiline `logger.warning("API call failed (attempt ...)` block.
 # We insert exc_info=True before the closing paren on the line that has
-# `_error_summary,`.
-NEEDLE_2 = '''logger.warning(
-                        "API call failed (attempt %s/%s) error_type=%s %s summary=%s",
-                        retry_count,
-                        max_retries,
-                        error_type,
-                        self._client_log_context(),
-                        _error_summary,
-                    )'''
-REPL_2 = '''logger.warning(
-                        "API call failed (attempt %s/%s) error_type=%s %s summary=%s",
-                        retry_count,
-                        max_retries,
-                        error_type,
-                        self._client_log_context(),
-                        _error_summary,
-                        exc_info=True,
-                    )'''
+# `_error_summary,`. Built via "\n".join to avoid CRLF-vs-LF mismatches if
+# this patch file is checked out on Windows but applied in a Linux build.
+NEEDLE_2 = "\n".join([
+    'logger.warning(',
+    '                        "API call failed (attempt %s/%s) error_type=%s %s summary=%s",',
+    '                        retry_count,',
+    '                        max_retries,',
+    '                        error_type,',
+    '                        self._client_log_context(),',
+    '                        _error_summary,',
+    '                    )',
+])
+REPL_2 = "\n".join([
+    'logger.warning(',
+    '                        "API call failed (attempt %s/%s) error_type=%s %s summary=%s",',
+    '                        retry_count,',
+    '                        max_retries,',
+    '                        error_type,',
+    '                        self._client_log_context(),',
+    '                        _error_summary,',
+    '                        exc_info=True,',
+    '                    )',
+])
 
 def patch(needle: str, repl: str, label: str, source: str) -> str:
     if repl in source:
