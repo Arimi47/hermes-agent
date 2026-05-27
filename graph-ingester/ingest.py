@@ -272,7 +272,7 @@ def ingest(driver: Driver) -> tuple[int, int, int, int]:
     return files, mention_edges, refer_edges, deleted
 
 
-def record_run(driver: Driver, files: int, mentions: int, refers: int, duration_ms: int, error: str | None = None) -> None:
+def record_run(driver: Driver, files: int, mentions: int, refers: int, deleted: int, duration_ms: int, error: str | None = None) -> None:
     """Writes a singleton IngestRun node so Mission Control can show
     'last ingest N seconds ago' without SSH'ing to the container."""
     with driver.session() as s:
@@ -283,10 +283,11 @@ def record_run(driver: Driver, files: int, mentions: int, refers: int, duration_
                 r.files = $files,
                 r.mentions = $mentions,
                 r.refers = $refers,
+                r.deleted = $deleted,
                 r.duration_ms = $duration_ms,
                 r.error = $error
             """,
-            files=files, mentions=mentions, refers=refers,
+            files=files, mentions=mentions, refers=refers, deleted=deleted,
             duration_ms=duration_ms, error=error,
         )
 
@@ -296,13 +297,13 @@ def main() -> None:
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     t0 = time.time()
     err = None
-    files = mentions = refers = 0
+    files = mentions = refers = deleted = 0
     try:
         driver.verify_connectivity()
-        files, mentions, refers = ingest(driver)
+        files, mentions, refers, deleted = ingest(driver)
         print(
             f"[ingest] {files} nodes, {mentions} MENTIONS, "
-            f"{refers} REFERS_TO from {VAULT_PATH}"
+            f"{refers} REFERS_TO, {deleted} stale deleted from {VAULT_PATH}"
         )
     except Exception as e:
         err = str(e)
@@ -311,7 +312,7 @@ def main() -> None:
     finally:
         duration_ms = int((time.time() - t0) * 1000)
         try:
-            record_run(driver, files, mentions, refers, duration_ms, err)
+            record_run(driver, files, mentions, refers, deleted, duration_ms, err)
         except Exception as log_err:
             print(f"[ingest-record-failed] {log_err}", file=sys.stderr)
         driver.close()
