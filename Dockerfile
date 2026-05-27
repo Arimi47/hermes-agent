@@ -2,7 +2,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl ca-certificates git gettext-base \
+        curl ca-certificates git gettext-base xz-utils \
         poppler-utils tesseract-ocr tesseract-ocr-heb tesseract-ocr-deu && \
     rm -rf /var/lib/apt/lists/*
 
@@ -10,8 +10,10 @@ RUN apt-get update && \
 # Pinned to an upstream tag so rebuilds are reproducible. Bumping HERMES_REF
 # busts this layer's Docker cache and pulls the new release on next Railway build.
 ARG HERMES_REF=v2026.5.16
+COPY patches/hermes_traceback_patch.py /tmp/hermes_traceback_patch.py
 RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent && \
     cd /tmp/hermes-agent && \
+    python3 /tmp/hermes_traceback_patch.py /tmp/hermes-agent/run_agent.py && \
     uv pip install --system --no-cache -e ".[all]" && \
     rm -rf /tmp/hermes-agent/.git
 
