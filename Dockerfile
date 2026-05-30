@@ -9,12 +9,20 @@ RUN apt-get update && \
 # Install hermes-agent as a package (gives us the `hermes` CLI entry point).
 # Pinned to an upstream tag so rebuilds are reproducible. Bumping HERMES_REF
 # busts this layer's Docker cache and pulls the new release on next Railway build.
-ARG HERMES_REF=v2026.5.16
-COPY patches/hermes_traceback_patch.py /tmp/hermes_traceback_patch.py
+ARG HERMES_REF=v2026.5.29.2
+# NOTE: hermes_traceback_patch.py was dropped at v2026.5.29.2. Its purpose was
+# to surface the codex null-`response.output` TypeError (see
+# openai_responses_none_guard.py) in the gateway log so we could file a targeted
+# upstream bug. Upstream fixed the root cause in agent/codex_runtime.py: the
+# codex stream now assembles output from response.output_item.done events and
+# never reads response.completed.response.output, making it structurally immune
+# to the null-output bug class. The patch's needles in run_agent.py no longer
+# exist (logging moved into agent/chat_completion_helpers.py), so re-adding it
+# would hard-fail the build. The openai none-guard below is kept as a harmless
+# SDK-level safety net (openai==2.24.0 still has the bare iteration).
 COPY patches/openai_responses_none_guard.py /tmp/openai_responses_none_guard.py
 RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent && \
     cd /tmp/hermes-agent && \
-    python3 /tmp/hermes_traceback_patch.py /tmp/hermes-agent/run_agent.py && \
     uv pip install --system --no-cache -e ".[all]" && \
     python3 /tmp/openai_responses_none_guard.py && \
     rm -rf /tmp/hermes-agent/.git
