@@ -200,6 +200,21 @@ if [ -n "${NEO4J_URI:-}" ] && [ -n "${NEO4J_PASSWORD:-}" ]; then
     echo "[lint] background weekly lint report loop started (PID $!)"
 fi
 
+# MS365 Token-Freshness-Probe - stuendlich. Refresh-Tokens sterben nach
+# ~90 Tagen Idle; ohne Probe faellt das erst beim naechsten Mail-Tool-Call
+# auf. Die Probe refresht still pro Mailbox (haelt Tokens aktiv) und
+# schreibt ms365-probe-status.json; Fehlschlaege landen im Gateway-Log.
+if [ -n "${MS365_MCP_CLIENT_ID:-}" ]; then
+    (
+        sleep 420
+        while true; do
+            timeout -k 30 300 python /app/ms365-mcp/probe.py 2>&1 | sed 's/^/[ms365-probe] /' || true
+            sleep 3600
+        done
+    ) &
+    echo "[ms365] hourly token-freshness probe started (PID $!)"
+fi
+
 # /data/.hermes Backup-Loop - stuendlich, verschluesselt, off-volume.
 # Blast-Radius ohne Backup: .env (alle API-Keys), Codex auth.json,
 # ms365-Tokens (3 Mailboxen mit Device-Code neu einloggen), google-Tokens,

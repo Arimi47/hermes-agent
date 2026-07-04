@@ -56,7 +56,7 @@ def load_token() -> str:
         "client_secret": tokens["client_secret"],
         "refresh_token": tokens["refresh_token"],
         "grant_type": "refresh_token",
-    })
+    }, timeout=30)
     new = r.json()
     if "access_token" in new:
         tokens["access_token"] = new["access_token"]
@@ -79,6 +79,7 @@ def upload_to_drive(token: str, file_path: str, filename: str | None = None) -> 
             "metadata": ("metadata", metadata, "application/json; charset=UTF-8"),
             "file": (fname, content, mime),
         },
+        timeout=120,
     )
     r.raise_for_status()
     data = r.json()
@@ -89,6 +90,7 @@ def get_sheet_id(token: str) -> int:
     r = requests.get(
         f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}?fields=sheets.properties",
         headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
     )
     r.raise_for_status()
     for s in r.json().get("sheets", []):
@@ -101,6 +103,7 @@ def get_all_rows(token: str) -> list[list[str]]:
     r = requests.get(
         f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}/values/{SHEET_NAME}!A:Q",
         headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
     )
     r.raise_for_status()
     return r.json().get("values", [])
@@ -192,6 +195,7 @@ def apply_currency_format(token: str, sheet_id_num: int, row_index_0based: int) 
         f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}:batchUpdate",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json={"requests": reqs},
+        timeout=30,
     )
     r.raise_for_status()
 
@@ -205,6 +209,7 @@ def update_row(token: str, sheet_id_num: int, row_index_0based: int, updated_row
         "?valueInputOption=USER_ENTERED",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json={"range": range_str, "values": [updated_row]},
+        timeout=30,
     )
     r.raise_for_status()
     apply_currency_format(token, sheet_id_num, row_index_0based)
@@ -219,6 +224,7 @@ def append_row(token: str, sheet_id_num: int, row: list) -> dict:
         "?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json={"values": [row]},
+        timeout=30,
     )
     r.raise_for_status()
     result = r.json()
@@ -234,6 +240,7 @@ def append_row(token: str, sheet_id_num: int, row: list) -> dict:
                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                     json={"range": f"{SHEET_NAME}!K{row_num}",
                           "values": [[f"=IF(I{row_num}>0,H{row_num}/I{row_num},\"\")"]]},
+                    timeout=30,
                 )
                 r2.raise_for_status()
             apply_currency_format(token, sheet_id_num, row_num - 1)

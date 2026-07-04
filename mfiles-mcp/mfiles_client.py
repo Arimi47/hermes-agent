@@ -25,6 +25,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger('mfiles_client')
 
+
+class MFilesUnavailableError(Exception):
+    """Transport/auth/5xx failure talking to M-Files.
+
+    Distinct from an empty/404 result on purpose: SOUL.md forbids the
+    agent from inventing data, so 'keine Treffer' und 'M-Files ist down'
+    duerfen niemals dieselbe Antwort sein. Read tools let this propagate;
+    FastMCP surfaces the message as a tool error to the agent.
+    """
+
 # Property IDs from M-Files
 PROPERTY_IDS = {
     # General
@@ -343,14 +353,61 @@ class MFilesClient:
             raise
 
     async def get(self, endpoint: str, **kwargs) -> Optional[Any]:
-        """Async GET request"""
+        """Async GET request.
+
+        Returns None only for 404 (a genuine 'not found'). Transport
+        failures, auth errors and 5xx raise MFilesUnavailableError -
+        previously every failure collapsed to None and the agent told
+        Ari 'keine Treffer' while M-Files was simply unreachable.
+        """
         try:
             response = await self._request_with_retry('GET', endpoint, **kwargs)
-            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"GET {endpoint} failed (transport): {e}")
+            raise MFilesUnavailableError(
+                f"M-Files nicht erreichbar (GET {endpoint}): {e}") from e
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            logger.error(f"GET {endpoint} failed: {response.status_code} {response.text[:300]}")
+            raise MFilesUnavailableError(
+                f"M-Files Fehler {response.status_code} bei GET {endpoint}: {response.text[:200]}")
+        try:
             return response.json()
         except Exception as e:
-            logger.error(f"GET {endpoint} failed: {e}")
-            return None
+            raise MFilesUnavailableError(
+                f"M-Files lieferte ungueltiges JSON (GET {endpoint}): {e}") from e
+
+    async def get_items_paged(self, endpoint: str, limit: int = 500,
+                              max_items: int = 5000) -> List[Dict[str, Any]]:
+        """Fetch an /objects listing with MoreResults pagination.
+
+        A plain GET returns one server-bounded page plus a MoreResults
+        flag; reading only Items silently truncates large result sets and
+        the agent then reasons over a partial portfolio (wrong DSCR/rent
+        totals, no signal). Same loop as get_view_items, generalised for
+        /objects queries.
+        """
+        sep = '&' if '?' in endpoint else '?'
+        all_items: List[Dict[str, Any]] = []
+        resp = await self.get(f"{endpoint}{sep}limit={limit}")
+        if not resp:
+            return []
+        items = resp.get('Items', []) if isinstance(resp, dict) else resp
+        all_items.extend(items)
+        more = resp.get('MoreResults', False) if isinstance(resp, dict) else False
+        while more and len(all_items) < max_items:
+            resp = await self.get(f"{endpoint}{sep}limit={limit}&s={len(all_items)}")
+            if not resp:
+                break
+            new_items = resp.get('Items', []) if isinstance(resp, dict) else resp
+            if not new_items:
+                break
+            all_items.extend(new_items)
+            more = resp.get('MoreResults', False) if isinstance(resp, dict) else False
+        if more:
+            logger.warning(f"{endpoint}: result truncated at max_items={max_items}")
+        return all_items
 
     # =========================================================================
     # Write Operations (Status Changes, Comments)
@@ -555,11 +612,10 @@ class MFilesClient:
         """Fetch all unique portfolios from M-Files via Company objects"""
         logger.info("Fetching all portfolios...")
 
-        companies = await self.get(f"/objects/{COMPANY_OBJECT_TYPE}")
-        if not companies:
+        items = await self.get_items_paged(f"/objects/{COMPANY_OBJECT_TYPE}")
+        if not items:
             return []
 
-        items = companies.get('Items', []) if isinstance(companies, dict) else companies
         portfolios_dict: Dict[str, int] = {}
 
         for item in items:
@@ -593,11 +649,10 @@ class MFilesClient:
 
     async def get_portfolio_companies(self, portfolio_name: str) -> List[int]:
         """Get company IDs belonging to a portfolio"""
-        companies = await self.get(f"/objects/{COMPANY_OBJECT_TYPE}")
-        if not companies:
+        items = await self.get_items_paged(f"/objects/{COMPANY_OBJECT_TYPE}")
+        if not items:
             return []
 
-        items = companies.get('Items', []) if isinstance(companies, dict) else companies
         company_ids = []
 
         for item in items:
@@ -634,11 +689,10 @@ class MFilesClient:
             logger.warning(f"No companies found for portfolio '{portfolio_name}'")
             return []
 
-        properties_data = await self.get(f"/objects/{PROPERTY_OBJECT_TYPE}")
-        if not properties_data:
+        items = await self.get_items_paged(f"/objects/{PROPERTY_OBJECT_TYPE}")
+        if not items:
             return []
 
-        items = properties_data.get('Items', []) if isinstance(properties_data, dict) else properties_data
         portfolio_properties = []
 
         for item in items:
@@ -678,11 +732,7 @@ class MFilesClient:
 
     async def get_all_properties(self) -> List[Dict[str, Any]]:
         """Get all properties (Liegenschaften)"""
-        properties_data = await self.get(f"/objects/{PROPERTY_OBJECT_TYPE}")
-        if not properties_data:
-            return []
-
-        items = properties_data.get('Items', []) if isinstance(properties_data, dict) else properties_data
+        items = await self.get_items_paged(f"/objects/{PROPERTY_OBJECT_TYPE}")
         return [
             {
                 'id': item.get('ObjVer', {}).get('ID') or item.get('ID'),
@@ -751,12 +801,10 @@ class MFilesClient:
         logger.info(f"Fetching units for property {property_id} (cache miss)...")
 
         search_url = f"/objects/{UNIT_OBJECT_TYPE}?p{PROPERTY_IDS['Liegenschaften']}={property_id}&include=properties"
-        units_data = await self.get(search_url)
-
-        if not units_data:
+        items = await self.get_items_paged(search_url)
+        if not items:
             return []
 
-        items = units_data.get('Items', []) if isinstance(units_data, dict) else units_data
         units = []
 
         for item in items:
@@ -904,12 +952,10 @@ class MFilesClient:
         logger.info(f"Fetching mortgages for property {property_id} (cache miss)...")
 
         search_url = f"/objects?p{PROPERTY_IDS['Klasse']}={MORTGAGE_CLASS_ID}&include=properties"
-        mortgages_data = await self.get(search_url)
-
-        if not mortgages_data:
+        items = await self.get_items_paged(search_url)
+        if not items:
             return []
 
-        items = mortgages_data.get('Items', []) if isinstance(mortgages_data, dict) else mortgages_data
         property_mortgages = []
 
         for item in items:
@@ -1039,12 +1085,10 @@ class MFilesClient:
         logger.info("Fetching all mortgages...")
 
         search_url = f"/objects?p{PROPERTY_IDS['Klasse']}={MORTGAGE_CLASS_ID}"
-        mortgages_data = await self.get(search_url)
-
-        if not mortgages_data:
+        items = await self.get_items_paged(search_url)
+        if not items:
             return []
 
-        items = mortgages_data.get('Items', []) if isinstance(mortgages_data, dict) else mortgages_data
         all_mortgages = []
 
         for item in items:
