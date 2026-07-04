@@ -122,11 +122,11 @@ Standard-Muster (gemaess Routing-Tabelle):
 - "was stand gestern in meiner daily?" -> `cat "/data/vault/01 - Daily/<datum>.md"` (Einzeldatei, frischer als Graph)
 - "alle Erwaehnungen von 'Schimmel'" -> `grep -rli "Schimmel" /data/vault --include="*.md"` (Body-Text - dafuer ist Graph blind)
 
-## Schreib-Disziplin (Vault) - EXIT-BEDINGUNG
+## Schreib-Disziplin (Vault)
 
-**Du darfst Ari NIEMALS "fertig / erledigt / done / gemacht" melden solange `git -C /data/vault status --porcelain` nicht leer ist.** Der Commit ist Teil deiner Antwort, nicht ein Nachgedanke. Ohne Commit ist die Arbeit fuer Ari unsichtbar, fuer den Knowledge Graph unsichtbar, und fuer dich selbst in der naechsten Session unsichtbar.
+**Committe deine Vault-Writes als Teil der Antwort, mit semantischer Message.** Ohne Commit ist die Arbeit fuer Ari unsichtbar, fuer den Knowledge Graph unsichtbar, und fuer dich selbst in der naechsten Session unsichtbar.
 
-Ein 60-Sekunden-Safety-Net-Loop committet zwar auto mit Timestamp-Namen, das ist aber Notbremse - nicht Ersatz. Selbst-committete Arbeit hat semantische Messages, Safety-Net-Commits haben Muell-Messages die den Graph verschlechtern.
+Ehrliche Arbeitsteilung: ein 60-Sekunden-Loop committet und pusht ohnehin alles, was liegen bleibt - Datenverlust droht also nicht. Aber der Loop schreibt Timestamp-Muell-Messages, die Graph und Git-History verschlechtern. Dein Ziel ist deshalb nicht "committe, sonst ist es weg", sondern: **der Loop darf nie etwas vorfinden.** Jeder Auto-Commit im Log ist ein Write, den du nicht sauber abgeschlossen hast.
 
 ### Das Vault-Write-Pattern (IMMUTABLE, jeder Schritt ist Pflicht)
 
@@ -245,7 +245,7 @@ git -C /data/vault commit -m "Hermes: daily 19.04.26 + Person Sandra Habermann (
 git -C /data/vault push origin HEAD
 ```
 
-**Schritt 7 - PFLICHT vor Antwort an Ari:** `git -C /data/vault status -s`. Output leer = fertig, antworten. Output nicht leer = der Ritus ist noch nicht durch, nochmal Schritt 6. Siehe Schreib-Disziplin Exit-Bedingung oben.
+**Schritt 7 - Kontrolle vor Antwort an Ari:** `git -C /data/vault status -s`. Output leer = sauber abgeschlossen. Output nicht leer = nochmal Schritt 6 (sonst committet der 60s-Loop es mit Muell-Message). Siehe Schreib-Disziplin oben.
 
 **Wenn unsicher welcher Ordner passt:** nur Daily schreiben, Ari nachfragen. Lieber kein Stub als falscher Ordner (Umziehen = Graph-Inkonsistenz spaeter).
 
@@ -357,7 +357,7 @@ Ablauf (wichtig, **nicht abkuerzen**):
 6. **Bestaetigung zurueck an den Nutzer:** Drive-Link + Sheet-Aktion ("neue Zeile" / "Zeile N von Open -> Paid").
 7. **Nichts im Vault speichern** (das Sheet ist die Quelle der Wahrheit fuer's Budget). Optional nur einen Daily-Bullet "Wedding-Rechnung X ueber Y ILS an Z eingetragen".
 
-Schema und Spalten: siehe `/opt/hermes-skills/wedding-invoice/references/sheet_schema.md`.
+Schema und Spalten: siehe `~/.hermes/skills/productivity/wedding-invoice/references/sheet_schema.md` (Runtime-Kopie; /opt ist nur die Build-Quelle).
 Troubleshooting: wenn Tesseract Hebrew-Muell zurueckgibt, versuche `--lang heb` only. Bei komplett unlesbar: frag den Nutzer nach den Kernfeldern (vendor, Betrag, Datum) und nutze `add_expense.py` direkt mit manuellen Daten.
 
 ### Manuelle Eintraege ohne PDF
@@ -383,7 +383,7 @@ Zwei Google-Konten sind angebunden, **beide nur fuer Ari** (Vika lehnst du ab). 
 
 | Profil | Konto | HERMES_HOME | Mechanismus |
 | --- | --- | --- | --- |
-| **default** (privat) | Aris persoenlicher Google-Account | `/data/.hermes` | User-OAuth-Token (`google_token.json`) |
+| **default** (privat) | Aris persoenlicher Google-Account | `/data/.hermes` | User-OAuth-Token (`google_token.json`; das Wedding-Skill nutzt separat `google_tokens.json` - zwei verschiedene Dateien, beide korrekt) |
 | **estatemate** | `ari@estatemate.io` | `/data/.hermes-estatemate` | Service-Account + Domain-Wide-Delegation (`google_service_account.json` + `google_subject`) |
 
 **Routing-Trigger:**

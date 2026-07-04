@@ -232,7 +232,9 @@ class BasicAuth(AuthenticationBackend):
             user, _, pw = base64.b64decode(creds).decode().partition(":")
         except Exception:
             raise AuthenticationError("Invalid credentials")
-        if user == ADMIN_USERNAME and pw == ADMIN_PASSWORD:
+        user_ok = secrets.compare_digest(user.encode(), ADMIN_USERNAME.encode())
+        pw_ok = secrets.compare_digest(pw.encode(), ADMIN_PASSWORD.encode())
+        if user_ok and pw_ok:
             return AuthCredentials(["authenticated"]), SimpleUser(user)
         raise AuthenticationError("Invalid credentials")
 
@@ -264,8 +266,15 @@ class Gateway:
         self.restarts = 0
         self.auto_restarts = 0
         self.gave_up = False
+        # Serialises start/stop/restart - two schnelle Dashboard-Klicks
+        # konnten vorher stop() und start() interleaved ausfuehren.
+        self._op_lock = asyncio.Lock()
 
     async def start(self, *, supervised: bool = False):
+        async with self._op_lock:
+            await self._start(supervised=supervised)
+
+    async def _start(self, *, supervised: bool = False):
         if self.proc and self.proc.returncode is None:
             return
         if not supervised:
@@ -314,6 +323,10 @@ class Gateway:
                 pass
 
     async def stop(self):
+        async with self._op_lock:
+            await self._stop()
+
+    async def _stop(self):
         if not self.proc or self.proc.returncode is not None:
             self.state = "stopped"
             return
@@ -328,9 +341,10 @@ class Gateway:
         self.started_at = None
 
     async def restart(self):
-        await self.stop()
-        self.restarts += 1
-        await self.start()
+        async with self._op_lock:
+            await self._stop()
+            self.restarts += 1
+            await self._start()
 
     async def _drain(self):
         assert self.proc and self.proc.stdout
@@ -340,6 +354,7 @@ class Gateway:
             # Mirror to parent stdout so Railway logs capture gateway output
             # (admin-UI deque alone makes primary-model-failed invisible in ops).
             print(f"[gw] {line}", flush=True)
+            append_gw_log(line)
         if self.state == "running":
             # Crash (not a stop()/restart() - those set state first).
             ran_for = time.time() - (self.started_at or time.time())
@@ -347,6 +362,7 @@ class Gateway:
             msg = f"[error] Gateway exited (code {self.proc.returncode})"
             self.logs.append(msg)
             print(f"[gw] {msg}", flush=True)
+            append_gw_log(msg)
             if ran_for > self.STABLE_RUN_SECS:
                 self.auto_restarts = 0
             asyncio.create_task(self._supervise())
@@ -395,6 +411,22 @@ class Gateway:
 
 gw = Gateway()
 cfg_lock = asyncio.Lock()
+
+# Persistente Gateway-Logs fuer Post-Crash-Forensik: der 500-Zeilen-
+# Ringpuffer stirbt mit dem Container, Railway-Retention ist begrenzt.
+GW_LOG_FILE = Path(HERMES_HOME) / "logs" / "gateway.log"
+GW_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def append_gw_log(line: str) -> None:
+    try:
+        GW_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if GW_LOG_FILE.exists() and GW_LOG_FILE.stat().st_size > GW_LOG_MAX_BYTES:
+            GW_LOG_FILE.replace(GW_LOG_FILE.with_suffix(".log.1"))
+        with GW_LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 # ── Route handlers ────────────────────────────────────────────────────────────
@@ -775,6 +807,29 @@ async def api_vault_task_status(request: Request):
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
+def _codex_auth_valid(path: Path) -> bool:
+    """JSON-parse statt st_size>100: auf dem Volume liegt ein
+    auth.json.corrupt von genau dem Fall, den der Groessen-Check nicht
+    fing - eine grosse-aber-kaputte Datei startet sonst einen
+    crash-loopenden Gateway."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+
+    def has_token(obj) -> bool:
+        if isinstance(obj, dict):
+            return any(
+                (isinstance(v, str) and v.strip() and "token" in k.lower()) or has_token(v)
+                for k, v in obj.items()
+            )
+        if isinstance(obj, list):
+            return any(has_token(v) for v in obj)
+        return False
+
+    return has_token(data)
+
+
 async def auto_start():
     """Start the gateway automatically on boot if any usable credential is
     present. The legacy check only looks at PROVIDER_KEYS (classic API keys
@@ -786,7 +841,7 @@ async def auto_start():
     data = read_env(ENV_FILE)
     has_provider_key = any(data.get(k) for k in PROVIDER_KEYS)
     auth_path = Path(HERMES_HOME) / "auth.json"
-    has_codex_oauth = auth_path.exists() and auth_path.stat().st_size > 100
+    has_codex_oauth = _codex_auth_valid(auth_path)
     if has_provider_key or has_codex_oauth:
         origin = "provider key" if has_provider_key else "Codex OAuth token"
         print(f"[server] auto-starting gateway (source: {origin})", flush=True)

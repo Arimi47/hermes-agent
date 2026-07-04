@@ -27,7 +27,7 @@ async function safeCount(cypher: string): Promise<number | null> {
 
 async function loadStats() {
   return {
-    nodes: await safeCount('MATCH (n) RETURN count(n) AS n'),
+    nodes: await safeCount('MATCH (n) WHERE NOT n:IngestRun RETURN count(n) AS n'),
     edges: await safeCount('MATCH ()-[r]->() RETURN count(r) AS n'),
     // date(d.date) is identity on a Neo4j Date, parses ISO strings, and
     // extracts the date part from a DateTime. Safer than datetime(d.date)

@@ -1,5 +1,6 @@
-"""One-shot wipe of all nodes + edges. Use after an ingester schema
-change. Next scheduled ingest repopulates from scratch."""
+"""One-shot wipe of all nodes + edges - DATA only. Schema (the
+entity_name_unique constraint) survives; ingest.py's ensure_schema
+recreates it anyway. Next scheduled ingest repopulates from scratch."""
 import os
 
 from neo4j import GraphDatabase

@@ -26,20 +26,22 @@ const toInt = (v: NodeRow['id']) =>
 
 export async function GET() {
   try {
-    const nodeRows = await readQuery<NodeRow>(
-      `MATCH (n)
-       OPTIONAL MATCH (n)-[r]-()
-       WITH n, count(r) AS degree
-       RETURN id(n) AS id, n.name AS name,
-              coalesce([l IN labels(n) WHERE l <> 'Entity'][0], 'Entity') AS label,
-              degree`,
-    );
-    const linkRows = await readQuery<LinkRow>(
-      `MATCH (a)-[r]->(b)
-       WHERE type(r) IN ['MENTIONS', 'REFERS_TO']
-       RETURN id(a) AS source, id(b) AS target,
-              type(r) AS type, r.via AS via`,
-    );
+    const [nodeRows, linkRows] = await Promise.all([
+      readQuery<NodeRow>(
+        `MATCH (n)
+         OPTIONAL MATCH (n)-[r]-()
+         WITH n, count(r) AS degree
+         RETURN id(n) AS id, n.name AS name,
+                coalesce([l IN labels(n) WHERE l <> 'Entity'][0], 'Entity') AS label,
+                degree`,
+      ),
+      readQuery<LinkRow>(
+        `MATCH (a)-[r]->(b)
+         WHERE type(r) IN ['MENTIONS', 'REFERS_TO']
+         RETURN id(a) AS source, id(b) AS target,
+                type(r) AS type, r.via AS via`,
+      ),
+    ]);
     const nodes = nodeRows.map((n) => ({
       id: toInt(n.id),
       name: n.name ?? '(unnamed)',
