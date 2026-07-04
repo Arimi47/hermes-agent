@@ -97,8 +97,10 @@ def fetch_lint(driver) -> dict[str, Any]:
 
 
 def primary_label(labels: list[str] | None) -> str:
+    # Entity is the index base label on every node - skip it like Stub,
+    # otherwise every report line reads "Entity" instead of Person/Company.
     for label in labels or []:
-        if label != "Stub":
+        if label not in ("Stub", "Entity"):
             return label
     return "Note"
 

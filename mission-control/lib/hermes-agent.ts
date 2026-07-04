@@ -1,11 +1,11 @@
 // Thin helper for calling the hermes-agent admin API with basic auth.
-// The admin API is behind HTTP basic auth (Ari:Savta911!); we pull the
-// three values from env vars set on the mission-control Railway service:
-//   HERMES_AGENT_URL   - e.g. https://hermes-agent-production-ad27.up.railway.app
-//   HERMES_ADMIN_USER  - e.g. Ari
-//   HERMES_ADMIN_PASS  - e.g. Savta911!
+// All three values come from env vars set on the mission-control Railway
+// service (never hardcode credentials here - this file is in git):
+//   HERMES_AGENT_URL   - base URL of the hermes-agent service
+//   HERMES_ADMIN_USER  - admin API basic-auth user
+//   HERMES_ADMIN_PASS  - admin API basic-auth password
 // These routes run server-side (Next.js app/api/...) so the password never
-// reaches the browser.
+// reaches the browser. middleware.ts reuses the same pair to gate the UI.
 
 function cfg() {
   const url = process.env.HERMES_AGENT_URL;

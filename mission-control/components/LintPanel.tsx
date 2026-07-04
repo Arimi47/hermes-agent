@@ -159,7 +159,7 @@ export default function LintPanel() {
           <div className="activity-empty">no orphan notes</div>
         )}
         {section === 'orphans' && orphans.map((o) => {
-          const primary = o.labels?.find((l) => l !== 'Stub') ?? 'Note';
+          const primary = o.labels?.find((l) => l !== 'Stub' && l !== 'Entity') ?? 'Note';
           return (
             <button
               key={o.id}
@@ -182,7 +182,7 @@ export default function LintPanel() {
           <div className="activity-empty">no self-loops</div>
         )}
         {section === 'loops' && loops.map((l) => {
-          const primary = l.labels?.find((x) => x !== 'Stub') ?? 'Note';
+          const primary = l.labels?.find((x) => x !== 'Stub' && x !== 'Entity') ?? 'Note';
           return (
             <button
               key={`${l.id}-${l.edge_type}`}
