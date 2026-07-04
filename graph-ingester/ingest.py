@@ -4,22 +4,55 @@ Walks /data/vault recursively, parses YAML frontmatter + wikilinks, and
 upserts nodes + edges into Neo4j via idempotent MERGE queries. Safe to
 run repeatedly; node labels reflect folder structure, edge labels
 reflect folder-pairing + "MENTIONS" for generic prose wikilinks.
+
+Every node carries the :Entity base label, backed by a uniqueness
+constraint on Entity.name (see ensure_schema). All MERGE/MATCH patterns
+go through :Entity so they hit the constraint's index — a label-less
+`MERGE (n {name})` cannot use any index and degenerates to a full node
+scan per file, per pass.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
 import frontmatter
-from neo4j import GraphDatabase, Driver
+from neo4j import GraphDatabase, Driver, unit_of_work
 
 VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "/data/vault"))
 NEO4J_URI = os.environ["NEO4J_URI"]
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.environ["NEO4J_PASSWORD"]
+
+# Heartbeat file, written on EVERY run outcome — especially when Neo4j
+# itself is down (the IngestRun node can't record that case: writing it
+# requires the very DB that just failed). "Ingest hasn't succeeded in N
+# minutes" is detectable from this file's content/mtime via railway ssh
+# or the admin server, without a working graph.
+STATUS_FILE = Path(os.environ.get(
+    "GRAPH_INGEST_STATUS_FILE", "/data/.hermes/graph-ingest-status.json"))
+
+# A hung Neo4j must not stall the ingest loop forever: start.sh runs this
+# script sequentially, so without deadlines one stuck query would silently
+# stop all future passes. Driver-level connect deadlines + server-side
+# transaction timeouts bound every network interaction.
+DRIVER_KWARGS = dict(
+    connection_timeout=15,
+    connection_acquisition_timeout=30,
+    max_transaction_retry_time=30,
+)
+TX_TIMEOUT = 60  # seconds, enforced server-side per transaction
+BATCH_SIZE = 500  # rows per UNWIND transaction
+
+# If the walk sees less than this fraction of the previous run's file
+# count, assume a partial checkout (the 60s vault git loop rebases while
+# we walk) and skip the stale-node cleanup for this pass.
+CLEANUP_SHRINK_FLOOR = 0.7
 
 # Folder name (lowercased, trimmed of leading numeric prefix like "02 - ")
 # to Neo4j label.
@@ -85,43 +118,89 @@ def extract_wikilinks(content: str) -> list[str]:
     return list(seen)
 
 
-def upsert_node(tx, name: str, label: str, props: dict) -> None:
-    """Idempotent MERGE on name only, then assign label.
+def ensure_schema(driver: Driver) -> None:
+    """Idempotent schema setup, runs every pass.
 
-    Matching on name alone (no label in pattern) is critical: otherwise a
-    previously-created Stub node (from a wikilink referencing this entity
-    before its own file was walked) would NOT match `MERGE (n:Label {name})`,
-    and we'd end up with two distinct nodes for the same entity. Two-phase
-    approach instead: match-by-name, then promote via SET label + REMOVE Stub.
+    1. Migration: promote pre-Entity nodes (created by older ingester
+       versions) to :Entity. No-op scan once everything is labeled.
+       IngestRun is excluded — it is keyed by `key`, not `name`.
+    2. Uniqueness constraint on Entity.name. This is what makes every
+       MERGE below an index lookup instead of a full node scan, and it
+       is the DB-level guarantee against duplicate-name nodes that the
+       app-level two-phase MERGE alone cannot give.
+
+    Constraint creation fails if duplicate names already exist; that is
+    logged loudly (every pass) instead of auto-deduped, because merging
+    duplicates means merging their edges — a call for a human.
     """
-    clean = {k: v for k, v in props.items() if v is not None and not isinstance(v, (dict, list))}
+    @unit_of_work(timeout=300)
+    def migrate(tx):
+        tx.run(
+            """
+            MATCH (n)
+            WHERE n.name IS NOT NULL AND NOT n:Entity AND NOT n:IngestRun
+            SET n:Entity
+            """
+        )
+
+    with driver.session() as s:
+        s.execute_write(migrate)
+        try:
+            # Schema DDL is not allowed inside transaction functions —
+            # auto-commit is the correct mode here.
+            s.run(
+                "CREATE CONSTRAINT entity_name_unique IF NOT EXISTS "
+                "FOR (n:Entity) REQUIRE n.name IS UNIQUE"
+            ).consume()
+        except Exception as e:
+            print(
+                f"[schema] entity_name_unique constraint not active "
+                f"(duplicate names in graph? needs manual dedupe): {e}",
+                file=sys.stderr,
+            )
+
+
+@unit_of_work(timeout=TX_TIMEOUT)
+def upsert_nodes(tx, label: str, rows: list[dict]) -> None:
+    """Idempotent batch-MERGE on :Entity(name), then assign folder label.
+
+    Matching on Entity+name (no folder label in the pattern) is critical:
+    otherwise a previously-created Stub node (from a wikilink referencing
+    this entity before its own file was walked) would NOT match
+    `MERGE (n:Label {name})`, and we'd end up with two distinct nodes for
+    the same entity. Two-phase approach instead: match-by-name, then
+    promote via SET label + REMOVE Stub.
+    """
     tx.run(
         f"""
-        MERGE (n {{name: $name}})
+        UNWIND $rows AS row
+        MERGE (n:Entity {{name: row.name}})
         SET n:{label}
         REMOVE n:Stub
-        SET n += $props
+        SET n += row.props
         """,
-        name=name, props=clean,
+        rows=rows,
     )
 
 
-def upsert_edge(tx, src_name: str, tgt_name: str) -> None:
-    """Edge from an already-created source to a target node.
+@unit_of_work(timeout=TX_TIMEOUT)
+def upsert_mentions(tx, pairs: list[dict]) -> None:
+    """MENTIONS edges from already-created sources to target nodes.
 
-    Source is guaranteed to exist because ingest() calls upsert_node first
-    for every file. Target is matched by name only; if no node with that
-    name exists yet, create a Stub. A later ingest run (or later file walk)
-    will promote the Stub to a proper label via upsert_node's SET/REMOVE.
+    Sources are guaranteed to exist because ingest() upserts all nodes
+    first. Targets are matched by name; if no node with that name exists
+    yet, create a Stub. A later pass promotes the Stub via upsert_nodes'
+    SET/REMOVE.
     """
     tx.run(
         """
-        MATCH (src {name: $src_name})
-        MERGE (tgt {name: $tgt_name})
+        UNWIND $pairs AS p
+        MATCH (src:Entity {name: p.src})
+        MERGE (tgt:Entity {name: p.tgt})
         ON CREATE SET tgt:Stub
         MERGE (src)-[:MENTIONS]->(tgt)
         """,
-        src_name=src_name, tgt_name=tgt_name,
+        pairs=pairs,
     )
 
 
@@ -152,16 +231,11 @@ def _unwrap_wikilink(v: str) -> str:
     return s.strip()
 
 
-def yaml_edges(tx, src_name: str, props: dict) -> int:
-    """Scan YAML props; for every string value that matches an existing
-    node's name, create a REFERS_TO edge tagged with the YAML key.
-
-    Uses MATCH (not MERGE) for the target so we never create stubs from
-    YAML - only materialise edges when both ends are real nodes. That
-    keeps the graph honest: a YAML value `eigentuemer: "ACME GbR"` only
-    produces an edge if we actually have a Companies/ACME GbR.md file.
-    """
-    made = 0
+def yaml_refs(src_name: str, props: dict) -> list[dict]:
+    """Candidate REFERS_TO rows from YAML props: every string value that
+    could name another entity, tagged with its YAML key. Resolution
+    against the graph happens in upsert_yaml_edges."""
+    rows = []
     for key, raw in props.items():
         if key in SCALAR_YAML_KEYS:
             continue
@@ -172,21 +246,34 @@ def yaml_edges(tx, src_name: str, props: dict) -> int:
             tgt = _unwrap_wikilink(v)
             if not tgt or tgt == src_name:
                 continue
-            res = tx.run(
-                """
-                MATCH (src {name: $src_name})
-                MATCH (tgt {name: $tgt_name})
-                WHERE elementId(src) <> elementId(tgt)
-                MERGE (src)-[r:REFERS_TO {via: $via}]->(tgt)
-                RETURN count(r) AS n
-                """,
-                src_name=src_name, tgt_name=tgt, via=key,
-            ).single()
-            if res and res.get('n', 0) > 0:
-                made += 1
-    return made
+            rows.append({"src": src_name, "tgt": tgt, "via": key})
+    return rows
 
 
+@unit_of_work(timeout=TX_TIMEOUT)
+def upsert_yaml_edges(tx, rows: list[dict]) -> int:
+    """Materialise REFERS_TO edges where both ends are real nodes.
+
+    Uses MATCH (not MERGE) for the target so we never create stubs from
+    YAML - only materialise edges when both ends exist. That keeps the
+    graph honest: a YAML value `eigentuemer: "ACME GbR"` only produces
+    an edge if we actually have a Companies/ACME GbR.md file.
+    """
+    res = tx.run(
+        """
+        UNWIND $rows AS row
+        MATCH (src:Entity {name: row.src})
+        MATCH (tgt:Entity {name: row.tgt})
+        WHERE elementId(src) <> elementId(tgt)
+        MERGE (src)-[r:REFERS_TO {via: row.via}]->(tgt)
+        RETURN count(r) AS n
+        """,
+        rows=rows,
+    ).single()
+    return res["n"] if res else 0
+
+
+@unit_of_work(timeout=TX_TIMEOUT)
 def cleanup_stale(tx, seen_paths: list[str]) -> int:
     """Delete file-backed nodes whose path is no longer in the vault.
 
@@ -205,7 +292,7 @@ def cleanup_stale(tx, seen_paths: list[str]) -> int:
     """
     res = tx.run(
         """
-        MATCH (n)
+        MATCH (n:Entity)
         WHERE n.path IS NOT NULL
           AND NOT n.path IN $paths
         WITH n, count(n) AS _
@@ -215,6 +302,19 @@ def cleanup_stale(tx, seen_paths: list[str]) -> int:
         paths=seen_paths,
     ).single()
     return res["deleted"] if res else 0
+
+
+@unit_of_work(timeout=TX_TIMEOUT)
+def previous_file_count(tx) -> int | None:
+    rec = tx.run(
+        "MATCH (r:IngestRun {key: 'latest'}) RETURN r.files AS files"
+    ).single()
+    return rec["files"] if rec and rec["files"] is not None else None
+
+
+def chunked(rows: list, size: int = BATCH_SIZE) -> Iterable[list]:
+    for i in range(0, len(rows), size):
+        yield rows[i:i + size]
 
 
 def ingest(driver: Driver) -> tuple[int, int, int, int]:
@@ -228,14 +328,20 @@ def ingest(driver: Driver) -> tuple[int, int, int, int]:
       4. Cleanup pass: delete file-backed nodes whose path is no longer
          in the vault (handles renames and deletes; safe because Stubs
          and IngestRun have no `path` property).
+
+    Writes are batched (UNWIND, BATCH_SIZE rows per transaction) — one
+    round-trip per batch instead of one per node/edge.
     """
     files = 0
-    mention_edges = 0
-    refer_edges = 0
     deleted = 0
     parsed: list[tuple[str, str, str, dict]] = []
     seen_paths: list[str] = []
     for path in walk_vault():
+        rel_path = str(path.relative_to(VAULT_PATH))
+        # The file exists on disk, so its node must survive cleanup even
+        # if this particular read/parse fails — a transient YAML syntax
+        # error must not DETACH DELETE the node and all its edges.
+        seen_paths.append(rel_path)
         try:
             post = frontmatter.loads(path.read_text(encoding="utf-8", errors="replace"))
         except Exception as e:
@@ -244,39 +350,70 @@ def ingest(driver: Driver) -> tuple[int, int, int, int]:
         name = node_name(path)
         folder = folder_of(path)
         label = label_for(folder)
-        rel_path = str(path.relative_to(VAULT_PATH))
-        seen_paths.append(rel_path)
-        props = {
-            "path": rel_path,
-            "folder": folder,
-            **{k: v for k, v in post.metadata.items() if v is not None},
-        }
-        parsed.append((name, label, post.content, props))
+        meta = {k: v for k, v in post.metadata.items() if v is not None}
+        meta["path"] = rel_path
+        meta["folder"] = folder
+        parsed.append((name, label, post.content, meta))
 
+    # Group node rows by label: the label lives in the Cypher text (labels
+    # can't be parameterised), so one batched statement per label.
+    by_label: dict[str, list[dict]] = {}
+    mention_pairs: list[dict] = []
+    yaml_rows: list[dict] = []
+    for name, label, content, meta in parsed:
+        # Node props must be Neo4j-storable scalars; yaml_refs below still
+        # sees the full metadata (list values like `mieter: [A, B]` are
+        # edge sources, just not node properties).
+        props = {k: v for k, v in meta.items() if not isinstance(v, (dict, list))}
+        by_label.setdefault(label, []).append({"name": name, "props": props})
+        for target in extract_wikilinks(content):
+            mention_pairs.append({"src": name, "tgt": target})
+        yaml_rows.extend(yaml_refs(name, meta))
+
+    refer_edges = 0
     with driver.session() as session:
-        for name, label, _content, props in parsed:
-            session.execute_write(upsert_node, name, label, props)
-            files += 1
-        for name, _label, content, _props in parsed:
-            for target in extract_wikilinks(content):
-                session.execute_write(upsert_edge, name, target)
-                mention_edges += 1
+        for label, rows in by_label.items():
+            for batch in chunked(rows):
+                session.execute_write(upsert_nodes, label, batch)
+                files += len(batch)
+        for batch in chunked(mention_pairs):
+            session.execute_write(upsert_mentions, batch)
         # Pass 3 runs AFTER all wikilink edges so YAML-derived
         # REFERS_TO edges see the full node set.
-        for name, _label, _content, props in parsed:
-            refer_edges += session.execute_write(yaml_edges, name, props)
-        # Pass 4: cleanup stale file-backed nodes. Guarded on files > 0
-        # so a transient empty walk (e.g. mid-clone) cannot wipe the graph.
-        if files > 0:
+        for batch in chunked(yaml_rows):
+            refer_edges += session.execute_write(upsert_yaml_edges, batch)
+
+        # Pass 4 guards:
+        #   - files > 0: a transient empty walk (mid-clone) cannot wipe
+        #     the graph.
+        #   - shrink floor: the 60s vault git loop rebases while we walk,
+        #     so a partial checkout can present a shrunken file set. If
+        #     this walk saw far fewer files than the last recorded run,
+        #     skip cleanup and let the next pass (over a settled tree)
+        #     handle deletions.
+        prev = session.execute_read(previous_file_count)
+        shrunk = (
+            prev is not None and prev >= 20
+            and len(seen_paths) < CLEANUP_SHRINK_FLOOR * prev
+        )
+        if files > 0 and not shrunk:
             deleted = session.execute_write(cleanup_stale, seen_paths)
-    return files, mention_edges, refer_edges, deleted
+        elif shrunk:
+            print(
+                f"[cleanup-skipped] walk saw {len(seen_paths)} files vs "
+                f"{prev} last run (<{int(CLEANUP_SHRINK_FLOOR * 100)}%) - "
+                f"assuming partial vault checkout",
+                file=sys.stderr,
+            )
+    return files, len(mention_pairs), refer_edges, deleted
 
 
 def record_run(driver: Driver, files: int, mentions: int, refers: int, deleted: int, duration_ms: int, error: str | None = None) -> None:
     """Writes a singleton IngestRun node so Mission Control can show
     'last ingest N seconds ago' without SSH'ing to the container."""
-    with driver.session() as s:
-        s.run(
+    @unit_of_work(timeout=TX_TIMEOUT)
+    def write(tx):
+        tx.run(
             """
             MERGE (r:IngestRun {key: 'latest'})
             SET r.at = datetime(),
@@ -291,15 +428,30 @@ def record_run(driver: Driver, files: int, mentions: int, refers: int, deleted: 
             duration_ms=duration_ms, error=error,
         )
 
+    with driver.session() as s:
+        s.execute_write(write)
+
+
+def write_status(payload: dict) -> None:
+    try:
+        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATUS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(STATUS_FILE)
+    except Exception as e:
+        print(f"[ingest-status-failed] {e}", file=sys.stderr)
+
 
 def main() -> None:
     import time
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    driver = GraphDatabase.driver(
+        NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD), **DRIVER_KWARGS)
     t0 = time.time()
     err = None
     files = mentions = refers = deleted = 0
     try:
         driver.verify_connectivity()
+        ensure_schema(driver)
         files, mentions, refers, deleted = ingest(driver)
         print(
             f"[ingest] {files} nodes, {mentions} MENTIONS, "
@@ -311,6 +463,16 @@ def main() -> None:
         raise
     finally:
         duration_ms = int((time.time() - t0) * 1000)
+        write_status({
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ok": err is None,
+            "files": files,
+            "mentions": mentions,
+            "refers": refers,
+            "deleted": deleted,
+            "duration_ms": duration_ms,
+            "error": err,
+        })
         try:
             record_run(driver, files, mentions, refers, deleted, duration_ms, err)
         except Exception as log_err:

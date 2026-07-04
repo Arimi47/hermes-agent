@@ -30,7 +30,9 @@ export async function GET() {
       `MATCH (n)
        OPTIONAL MATCH (n)-[r]-()
        WITH n, count(r) AS degree
-       RETURN id(n) AS id, n.name AS name, labels(n)[0] AS label, degree`,
+       RETURN id(n) AS id, n.name AS name,
+              coalesce([l IN labels(n) WHERE l <> 'Entity'][0], 'Entity') AS label,
+              degree`,
     );
     const linkRows = await readQuery<LinkRow>(
       `MATCH (a)-[r]->(b)

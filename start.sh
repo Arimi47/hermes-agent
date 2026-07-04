@@ -156,9 +156,13 @@ export OBSIDIAN_VAULT_PATH="${OBSIDIAN_VAULT_PATH:-/data/vault}"
 if [ -n "${NEO4J_URI:-}" ] && [ -n "${NEO4J_PASSWORD:-}" ]; then
     (
         # Initial delay so the vault has time to clone on first boot.
+        # timeout: the loop runs sequentially, so without a watchdog one
+        # hung Neo4j query would silently stall ALL future ingest passes
+        # (the graph goes stale with no crash and no restart). ingest.py
+        # has its own driver/tx deadlines; this is the outer belt.
         sleep 30
         while true; do
-            python /app/graph-ingester/ingest.py 2>&1 | sed 's/^/[graph-ingest] /' || true
+            timeout -k 30 600 python /app/graph-ingester/ingest.py 2>&1 | sed 's/^/[graph-ingest] /' || true
             sleep 120
         done
     ) &
@@ -173,7 +177,7 @@ if [ -n "${NEO4J_URI:-}" ] && [ -n "${NEO4J_PASSWORD:-}" ]; then
     (
         sleep 240
         while true; do
-            python /app/graph-ingester/lint_report.py 2>&1 | sed 's/^/[lint-report] /' || true
+            timeout -k 30 900 python /app/graph-ingester/lint_report.py 2>&1 | sed 's/^/[lint-report] /' || true
             sleep 3600
         done
     ) &

@@ -266,7 +266,12 @@ def main() -> int:
         return 0
 
     DASHBOARDS_DIR.mkdir(parents=True, exist_ok=True)
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    driver = GraphDatabase.driver(
+        NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD),
+        connection_timeout=15,
+        connection_acquisition_timeout=30,
+        max_transaction_retry_time=30,
+    )
     try:
         driver.verify_connectivity()
         lint = fetch_lint(driver)

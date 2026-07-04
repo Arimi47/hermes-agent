@@ -11,19 +11,39 @@ import os
 from typing import Any
 
 from fastmcp import FastMCP
-from neo4j import GraphDatabase
+from neo4j import GraphDatabase, unit_of_work
 
 NEO4J_URI = os.environ["NEO4J_URI"]
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.environ["NEO4J_PASSWORD"]
 
-driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+# Bounded waits everywhere: an agent tool call must never hang on a slow
+# or briefly-down Neo4j. Connect deadlines on the driver, plus a
+# server-side transaction timeout on every query in _run.
+driver = GraphDatabase.driver(
+    NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD),
+    connection_timeout=15,
+    connection_acquisition_timeout=30,
+    max_transaction_retry_time=30,
+)
 mcp = FastMCP("hermes-graph")
+
+TX_TIMEOUT = 30  # seconds, enforced server-side
+MAX_ROWS = 1000  # hard cap so an unbounded query can't flood the tool result
 
 
 def _run(query: str, **params: Any) -> list[dict]:
+    @unit_of_work(timeout=TX_TIMEOUT)
+    def read(tx):
+        rows: list[dict] = []
+        for r in tx.run(query, **params):
+            rows.append(dict(r))
+            if len(rows) >= MAX_ROWS:
+                break
+        return rows
+
     with driver.session(default_access_mode="READ") as s:
-        return [dict(r) for r in s.run(query, **params)]
+        return s.execute_read(read)
 
 
 @mcp.tool()
@@ -36,7 +56,7 @@ def entity_lookup(name: str) -> dict:
     """
     rows = _run(
         """
-        MATCH (n)
+        MATCH (n:Entity)
         WHERE toLower(n.name) = toLower($name)
            OR toLower(n.name) CONTAINS toLower($name)
         OPTIONAL MATCH (n)-[:MENTIONS]-(nb)
@@ -63,7 +83,7 @@ def neighbors(name: str, depth: int = 1) -> dict:
     depth = 1 if depth not in (1, 2) else depth
     rows = _run(
         f"""
-        MATCH (n {{name: $name}})
+        MATCH (n:Entity {{name: $name}})
         OPTIONAL MATCH (n)-[:MENTIONS*1..{depth}]-(nb)
         WITH DISTINCT nb
         WHERE nb IS NOT NULL
@@ -108,9 +128,10 @@ def shortest_path(a: str, b: str, max_length: int = 6) -> dict:
     empty result if no path exists within `max_length` hops. Useful for
     "how is X connected to Y".
     """
+    max_length = max(1, min(int(max_length), 8))
     rows = _run(
         f"""
-        MATCH (a {{name: $a}}), (b {{name: $b}}),
+        MATCH (a:Entity {{name: $a}}), (b:Entity {{name: $b}}),
               p = shortestPath((a)-[:MENTIONS*..{max_length}]-(b))
         UNWIND nodes(p) AS n
         RETURN n.name AS name, labels(n) AS labels
@@ -124,10 +145,12 @@ def shortest_path(a: str, b: str, max_length: int = 6) -> dict:
 def graph_query_cypher(query: str) -> dict:
     """Escape hatch: run a raw Cypher query (read-only). Use when the
     typed tools above don't fit. The session runs in READ mode so write
-    statements are rejected at the driver level.
+    statements are rejected at the driver level. Results are capped at
+    1000 rows and 30s server-side — add LIMIT / narrow the pattern if
+    `truncated` comes back true.
     """
     rows = _run(query)
-    return {"rows": rows, "count": len(rows)}
+    return {"rows": rows, "count": len(rows), "truncated": len(rows) >= MAX_ROWS}
 
 
 @mcp.tool()

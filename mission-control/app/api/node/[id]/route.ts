@@ -39,7 +39,8 @@ export async function GET(
       `MATCH (n) WHERE id(n) = $id
        OPTIONAL MATCH (n)-[r]-()
        WITH n, count(r) AS degree
-       RETURN id(n) AS id, n.name AS name, labels(n)[0] AS label,
+       RETURN id(n) AS id, n.name AS name,
+              coalesce([l IN labels(n) WHERE l <> 'Entity'][0], 'Entity') AS label,
               properties(n) AS props, degree`,
       { id },
     );
@@ -49,7 +50,8 @@ export async function GET(
 
     const neighbours = await readQuery<NeighbourRow>(
       `MATCH (n)-[r]-(m) WHERE id(n) = $id
-       RETURN DISTINCT id(m) AS id, m.name AS name, labels(m)[0] AS label,
+       RETURN DISTINCT id(m) AS id, m.name AS name,
+              coalesce([l IN labels(m) WHERE l <> 'Entity'][0], 'Entity') AS label,
               CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END AS direction
        ORDER BY m.name`,
       { id },
