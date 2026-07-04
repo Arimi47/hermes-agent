@@ -215,18 +215,22 @@ if [ -n "${MS365_MCP_CLIENT_ID:-}" ]; then
     echo "[ms365] hourly token-freshness probe started (PID $!)"
 fi
 
-# /data/.hermes Backup-Loop - stuendlich, verschluesselt, off-volume.
+# /data Backup-Loop - stuendlich, verschluesselt, off-volume.
 # Blast-Radius ohne Backup: .env (alle API-Keys), Codex auth.json,
 # ms365-Tokens (3 Mailboxen mit Device-Code neu einloggen), google-Tokens,
-# MEMORY.md (das Gedaechtnis des Agenten), config.yaml, Pairing.
+# MEMORY.md (das Gedaechtnis des Agenten), config.yaml, Pairing, SA-Key.
+# ALLOWLIST statt Excludes: der erste Versuch mit Excludes hat 322 MB
+# erzeugt (node/, node_modules/, bin/ sind reproduzierbare Runtime-
+# Installationen) und GitHubs 100-MB-Limit gerissen. Nur Unersetzliches
+# wird gesichert - wenige MB.
 # Ziel ist der orphan Branch "hermes-backup" im Vault-Sync-Repo (gleicher
 # Token, kein zusaetzliches Secret) - force-push, es zaehlt nur der letzte
-# Stand. sessions/ und skills/ sind ausgenommen (gross, reproduzierbar).
+# Stand.
 #
 # Restore (im frischen Container, BACKUP_PASSPHRASE gesetzt):
 #   git clone --depth 1 --branch hermes-backup <vault-repo-url> /tmp/bk
 #   openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSPHRASE \
-#     -in /tmp/bk/hermes-home.tar.gz.enc | tar -xzf - -C /data/.hermes
+#     -in /tmp/bk/hermes-home.tar.gz.enc | tar -xzf - -C /data
 if [ -n "${BACKUP_PASSPHRASE:-}" ] && [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [ -n "${OBSIDIAN_VAULT_GITHUB_TOKEN:-}" ]; then
     (
         sleep 300
@@ -236,9 +240,28 @@ if [ -n "${BACKUP_PASSPHRASE:-}" ] && [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [
                 set -e
                 BK=$(mktemp -d)
                 trap 'rm -rf "$BK"' EXIT
-                tar -czf "$BK/hermes-home.tar.gz" -C /data/.hermes \
-                    --exclude='./sessions' --exclude='./skills' --exclude='./logs' \
-                    --exclude='./*.tmp' .
+                # Pfade relativ zu /data, damit ein Restore beide Homes
+                # (.hermes + .hermes-estatemate) in einem Zug zurueckspielt.
+                ITEMS=""
+                for item in \
+                    .hermes/.env .hermes/auth.json .hermes/config.yaml \
+                    .hermes/MEMORY.md .hermes/USER.md .hermes/SOUL.md \
+                    .hermes/google_client_secret.json \
+                    .hermes/google_token.json .hermes/google_tokens.json \
+                    .hermes/pairing .hermes/memories .hermes/kanban \
+                    .hermes/state .hermes/workspace \
+                    .hermes-estatemate; do
+                    [ -e "/data/$item" ] && ITEMS="$ITEMS $item"
+                done
+                for f in /data/.hermes/ms365_tokens*.json /data/.hermes/*-status.json; do
+                    [ -e "$f" ] && ITEMS="$ITEMS ${f#/data/}"
+                done
+                # tar exit 1 = "file changed as we read it" (live agent
+                # schreibt waehrenddessen) - fuer ein Backup akzeptabel.
+                tar -czf "$BK/hermes-home.tar.gz" -C /data \
+                    --exclude='.hermes-estatemate/__pycache__' \
+                    --exclude='.hermes-estatemate/logs' \
+                    $ITEMS || [ $? -eq 1 ]
                 openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_PASSPHRASE \
                     -in "$BK/hermes-home.tar.gz" -out "$BK/hermes-home.tar.gz.enc"
                 rm "$BK/hermes-home.tar.gz"
@@ -247,10 +270,10 @@ if [ -n "${BACKUP_PASSPHRASE:-}" ] && [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [
                 git config user.name "Hermes PA"
                 git config user.email "hermes@ari-birnbaum"
                 git add hermes-home.tar.gz.enc
-                git commit -qm "encrypted /data/.hermes snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                git commit -qm "encrypted hermes-home snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
                 git push -q --force "$BK_URL" hermes-backup:hermes-backup
             ) > /tmp/backup-last.log 2>&1; then
-                echo "[backup] pushed encrypted /data/.hermes snapshot to hermes-backup branch"
+                echo "[backup] pushed encrypted hermes-home snapshot to hermes-backup branch"
             else
                 echo "[backup] FAILED: $(tail -1 /tmp/backup-last.log)" >&2
             fi
