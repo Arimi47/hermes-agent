@@ -9,3 +9,18 @@ ref_ui_only/
 /skills/
 overview.md
 ms365_tokens*.json
+
+# Debug-Dumps aus railway-ssh / Log-Triage-Sessions (Repo-Root-Debris)
+/hermes-*.txt
+/graph-logs.txt
+/gw-*.txt
+/mc-logs.txt
+/mc-current.png
+/openai-source.txt
+/upstream-*.txt
+/deque-after-patch.txt
+/railway-after-patch.txt
+/*.tmp.py
+/*.tmp.status
+/C*UsersaribiOneDrive*
+.playwright-mcp/

@@ -1,0 +1,12 @@
+# Alle Textdateien mit LF committen UND auschecken. Verhindert das
+# CRLF-Rauschen (kompletter Tree "modified" nach Windows-Checkout) und
+# stellt sicher, dass start.sh & Co. im Linux-Container nie mit \r landen.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
