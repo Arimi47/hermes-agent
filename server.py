@@ -120,6 +120,15 @@ def read_env(path: Path) -> dict[str, str]:
     return out
 
 
+def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """write_text truncates before it writes - a crash mid-write corrupts
+    the target (fatal for .env: every secret lives there). Temp file in
+    the same dir + os.replace is atomic on POSIX."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding=encoding)
+    os.replace(tmp, path)
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
     """Merge the dashboard's model choice into the persisted config.yaml.
 
@@ -158,7 +167,7 @@ def write_config_yaml(data: dict[str, str]) -> None:
         model_block["default"] = model
         current["model"] = model_block
 
-    config_path.write_text(yaml.safe_dump(current, sort_keys=False))
+    _atomic_write_text(config_path, yaml.safe_dump(current, sort_keys=False))
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:
@@ -194,7 +203,7 @@ def write_env(path: Path, data: dict[str, str]) -> None:
         lines.extend(sorted(grouped["other"]))
         lines.append("")
 
-    path.write_text("\n".join(lines))
+    _atomic_write_text(path, "\n".join(lines))
 
 
 def mask(data: dict[str, str]) -> dict[str, str]:
@@ -435,6 +444,18 @@ async def api_config_put(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _read_status_file(path: Path) -> dict | None:
+    """Heartbeat JSONs written by the start.sh loops / graph ingester.
+    age_secs is derived from the file mtime so 'loop is dead' (stale file)
+    is distinguishable from 'loop reports an error' (fresh file, ok=false)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["age_secs"] = int(time.time() - path.stat().st_mtime)
+        return data
+    except Exception:
+        return None
+
+
 async def api_status(request: Request):
     if err := guard(request): return err
     data = read_env(ENV_FILE)
@@ -447,7 +468,13 @@ async def api_status(request: Request):
         name: {"configured": bool(v := data.get(key,"")) and v.lower() not in ("false","0","no")}
         for name, key in CHANNEL_MAP.items()
     }
-    return JSONResponse({"gateway": gw.status(), "providers": providers, "channels": channels})
+    return JSONResponse({
+        "gateway": gw.status(),
+        "providers": providers,
+        "channels": channels,
+        "graph_ingest": _read_status_file(Path(HERMES_HOME) / "graph-ingest-status.json"),
+        "vault_sync": _read_status_file(Path(HERMES_HOME) / "vault-sync-status.json"),
+    })
 
 
 async def api_logs(request: Request):
@@ -493,7 +520,7 @@ def _pjson(path: Path) -> dict:
 
 def _wjson(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    _atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
     try: os.chmod(path, 0o600)
     except OSError: pass
 
@@ -695,7 +722,7 @@ def _patch_task_status(full_path: Path, new_status: str) -> tuple[str, str]:
             lines[completed_line_idx] = cd_line
 
     new_text = "---\n" + "\n".join(lines) + "\n---\n" + body
-    full_path.write_text(new_text, encoding="utf-8")
+    _atomic_write_text(full_path, new_text)
     return old_status, full_path.name
 
 

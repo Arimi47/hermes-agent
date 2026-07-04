@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { readQuery } from '@/lib/neo4j';
+import { hermesGet } from '@/lib/hermes-agent';
 
 // IngestRun singleton written by graph-ingester/ingest.py on every
 // cycle. Mission Control surfaces this in the top bar so the operator
@@ -58,6 +59,32 @@ export async function GET() {
       },
     });
   } catch (e) {
+    // Neo4j unreachable - exactly the case the file heartbeat exists for.
+    // The agent's admin API serves graph-ingest-status.json, which the
+    // ingester writes even (especially) when Neo4j itself is down.
+    try {
+      const s = await hermesGet<{ graph_ingest?: Record<string, unknown> | null }>('/api/status');
+      const g = s?.graph_ingest as {
+        at?: string; files?: number; mentions?: number; refers?: number;
+        duration_ms?: number; error?: string | null;
+      } | null;
+      if (g?.at) {
+        return NextResponse.json({
+          configured: true,
+          fallback: 'agent-heartbeat',
+          run: {
+            at: g.at,
+            files: g.files ?? null,
+            mentions: g.mentions ?? null,
+            refers: g.refers ?? null,
+            duration_ms: g.duration_ms ?? null,
+            error: g.error ?? null,
+          },
+        });
+      }
+    } catch {
+      // agent unreachable too - fall through to the plain error payload
+    }
     return NextResponse.json(
       { configured: false, run: null, error: (e as Error).message },
       { status: 200 },

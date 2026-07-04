@@ -132,6 +132,12 @@ if [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [ -n "${OBSIDIAN_VAULT_GITHUB_TOKEN:
         # commit. Errors swallowed so a transient network blip or rebase
         # conflict never crashes the gateway.
         (
+            # Heartbeat: vault-sync-status.json wird jede Runde geschrieben.
+            # Ohne ihn bricht der Sync nach einem unloesbaren Rebase-Konflikt
+            # still fuer immer (jeder Push failt non-fast-forward, Commits
+            # stauen sich lokal, niemand merkt es). Admin /api/status liefert
+            # die Datei samt Alter aus.
+            VAULT_STATUS=/data/.hermes/vault-sync-status.json
             while true; do
                 sleep 60
                 if [ -n "$(git -C /data/vault status --porcelain 2>/dev/null)" ]; then
@@ -140,7 +146,17 @@ if [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [ -n "${OBSIDIAN_VAULT_GITHUB_TOKEN:
                 fi
                 git -C /data/vault pull --rebase --autostash >/dev/null 2>&1 \
                     || git -C /data/vault rebase --abort >/dev/null 2>&1 || true
-                git -C /data/vault push origin HEAD >/dev/null 2>&1 || true
+                if push_err=$(git -C /data/vault push origin HEAD 2>&1); then
+                    printf '{"at":"%s","ok":true,"error":null}\n' \
+                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$VAULT_STATUS.tmp" \
+                        && mv "$VAULT_STATUS.tmp" "$VAULT_STATUS"
+                else
+                    msg=$(printf '%s' "$push_err" | tail -1 | tr -d '"\\' | cut -c1-160)
+                    printf '{"at":"%s","ok":false,"error":"push: %s"}\n' \
+                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" > "$VAULT_STATUS.tmp" \
+                        && mv "$VAULT_STATUS.tmp" "$VAULT_STATUS"
+                    echo "[vault-sync] push failed: $msg" >&2
+                fi
             done
         ) &
         echo "[vault] background sync loop started (PID $!)"
@@ -182,6 +198,53 @@ if [ -n "${NEO4J_URI:-}" ] && [ -n "${NEO4J_PASSWORD:-}" ]; then
         done
     ) &
     echo "[lint] background weekly lint report loop started (PID $!)"
+fi
+
+# /data/.hermes Backup-Loop - stuendlich, verschluesselt, off-volume.
+# Blast-Radius ohne Backup: .env (alle API-Keys), Codex auth.json,
+# ms365-Tokens (3 Mailboxen mit Device-Code neu einloggen), google-Tokens,
+# MEMORY.md (das Gedaechtnis des Agenten), config.yaml, Pairing.
+# Ziel ist der orphan Branch "hermes-backup" im Vault-Sync-Repo (gleicher
+# Token, kein zusaetzliches Secret) - force-push, es zaehlt nur der letzte
+# Stand. sessions/ und skills/ sind ausgenommen (gross, reproduzierbar).
+#
+# Restore (im frischen Container, BACKUP_PASSPHRASE gesetzt):
+#   git clone --depth 1 --branch hermes-backup <vault-repo-url> /tmp/bk
+#   openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSPHRASE \
+#     -in /tmp/bk/hermes-home.tar.gz.enc | tar -xzf - -C /data/.hermes
+if [ -n "${BACKUP_PASSPHRASE:-}" ] && [ -n "${OBSIDIAN_VAULT_REPO_URL:-}" ] && [ -n "${OBSIDIAN_VAULT_GITHUB_TOKEN:-}" ]; then
+    (
+        sleep 300
+        BK_URL="${OBSIDIAN_VAULT_REPO_URL/https:\/\//https:\/\/x-access-token:${OBSIDIAN_VAULT_GITHUB_TOKEN}@}"
+        while true; do
+            if (
+                set -e
+                BK=$(mktemp -d)
+                trap 'rm -rf "$BK"' EXIT
+                tar -czf "$BK/hermes-home.tar.gz" -C /data/.hermes \
+                    --exclude='./sessions' --exclude='./skills' --exclude='./logs' \
+                    --exclude='./*.tmp' .
+                openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_PASSPHRASE \
+                    -in "$BK/hermes-home.tar.gz" -out "$BK/hermes-home.tar.gz.enc"
+                rm "$BK/hermes-home.tar.gz"
+                cd "$BK"
+                git init -q -b hermes-backup
+                git config user.name "Hermes PA"
+                git config user.email "hermes@ari-birnbaum"
+                git add hermes-home.tar.gz.enc
+                git commit -qm "encrypted /data/.hermes snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                git push -q --force "$BK_URL" hermes-backup:hermes-backup
+            ) > /tmp/backup-last.log 2>&1; then
+                echo "[backup] pushed encrypted /data/.hermes snapshot to hermes-backup branch"
+            else
+                echo "[backup] FAILED: $(tail -1 /tmp/backup-last.log)" >&2
+            fi
+            sleep 3600
+        done
+    ) &
+    echo "[backup] hourly encrypted backup loop started (PID $!)"
+else
+    echo "[backup] disabled (BACKUP_PASSPHRASE and/or vault repo env not set)"
 fi
 
 exec python /app/server.py
