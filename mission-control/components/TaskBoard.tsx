@@ -65,7 +65,7 @@ export default function TaskBoard() {
 
   const load = async () => {
     try {
-      const r = await fetch('/api/tasks', { cache: 'no-store' });
+      const r = await fetch('/api/tasks', { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
       const j = (await r.json()) as Feed;
       setData(j);
     } catch {
@@ -76,7 +76,7 @@ export default function TaskBoard() {
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      const r = await fetch('/api/tasks', { cache: 'no-store' });
+      const r = await fetch('/api/tasks', { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
       const j = (await r.json()) as Feed;
       if (!cancelled) setData(j);
     };
@@ -118,6 +118,7 @@ export default function TaskBoard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: t.path, status: 'done' }),
+        signal: AbortSignal.timeout(20_000),
       });
       const j = await r.json();
       if (!r.ok || j.ok === false) {

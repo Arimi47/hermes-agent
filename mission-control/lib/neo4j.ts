@@ -12,7 +12,13 @@ function make(): Driver {
   if (!uri || !pwd) {
     throw new Error('NEO4J_URI and NEO4J_PASSWORD must be set');
   }
-  return neo4j.driver(uri, neo4j.auth.basic(user, pwd));
+  // Bounded waits: without these a down/slow Neo4j hangs the route and the
+  // browser spinner never resolves into the error UI.
+  return neo4j.driver(uri, neo4j.auth.basic(user, pwd), {
+    connectionTimeout: 8000,
+    connectionAcquisitionTimeout: 10000,
+    maxTransactionRetryTime: 8000,
+  });
 }
 
 export function driver(): Driver {

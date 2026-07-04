@@ -238,16 +238,31 @@ def guard(request: Request):
 
 # ── Gateway manager ───────────────────────────────────────────────────────────
 class Gateway:
+    # Supervised-restart budget: consecutive crash-restarts before giving up.
+    # A stable run (>5 min) refills the budget; manual start/restart resets it.
+    MAX_AUTO_RESTARTS = 5
+    STABLE_RUN_SECS = 300
+    # After giving up, force a container restart via Railway's on_failure
+    # policy (which triggers on process exit, NOT on health checks) unless
+    # someone revives the gateway manually within this window.
+    GIVE_UP_EXIT_SECS = 900
+
     def __init__(self):
         self.proc: asyncio.subprocess.Process | None = None
         self.state = "stopped"
         self.logs: deque[str] = deque(maxlen=500)
         self.started_at: float | None = None
         self.restarts = 0
+        self.auto_restarts = 0
+        self.gave_up = False
 
-    async def start(self):
+    async def start(self, *, supervised: bool = False):
         if self.proc and self.proc.returncode is None:
             return
+        if not supervised:
+            # Manual start (boot, dashboard button): fresh backoff budget.
+            self.auto_restarts = 0
+        self.gave_up = False
         self.state = "starting"
         try:
             # .env values take priority over Railway env vars.
@@ -260,11 +275,16 @@ class Gateway:
             print(f"[gateway] model={model or '⚠ NOT SET'} | provider_key={'set' if provider_key else '⚠ NOT SET'}", flush=True)
             # Write config.yaml so hermes picks up the model (env vars alone aren't always enough)
             write_config_yaml(read_env(ENV_FILE))
+            # start_new_session: own process group, so stop() can killpg the
+            # whole tree. terminate() on the hermes pid alone orphans its MCP
+            # child processes - the PID leak behind the 2026-05-24 fork-bomb
+            # incident (ulimit in start.sh is only damage control).
             self.proc = await asyncio.create_subprocess_exec(
                 "hermes", "gateway",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
+                start_new_session=True,
             )
             self.state = "running"
             self.started_at = time.time()
@@ -273,16 +293,27 @@ class Gateway:
             self.state = "error"
             self.logs.append(f"[error] Failed to start: {e}")
 
+    def _signal_group(self, sig: int):
+        """Signal the gateway's whole process group (incl. MCP children)."""
+        assert self.proc
+        try:
+            os.killpg(self.proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            try:
+                self.proc.send_signal(sig)
+            except ProcessLookupError:
+                pass
+
     async def stop(self):
         if not self.proc or self.proc.returncode is not None:
             self.state = "stopped"
             return
         self.state = "stopping"
-        self.proc.terminate()
+        self._signal_group(signal.SIGTERM)
         try:
             await asyncio.wait_for(self.proc.wait(), timeout=10)
         except asyncio.TimeoutError:
-            self.proc.kill()
+            self._signal_group(signal.SIGKILL)
             await self.proc.wait()
         self.state = "stopped"
         self.started_at = None
@@ -301,10 +332,47 @@ class Gateway:
             # (admin-UI deque alone makes primary-model-failed invisible in ops).
             print(f"[gw] {line}", flush=True)
         if self.state == "running":
+            # Crash (not a stop()/restart() - those set state first).
+            ran_for = time.time() - (self.started_at or time.time())
             self.state = "error"
             msg = f"[error] Gateway exited (code {self.proc.returncode})"
             self.logs.append(msg)
             print(f"[gw] {msg}", flush=True)
+            if ran_for > self.STABLE_RUN_SECS:
+                self.auto_restarts = 0
+            asyncio.create_task(self._supervise())
+
+    async def _supervise(self):
+        """Auto-restart after a crash with exponential backoff.
+
+        Before this existed a gateway crash left the bot dead until someone
+        clicked restart in the dashboard - a transient provider error became
+        an indefinite outage.
+        """
+        if self.auto_restarts >= self.MAX_AUTO_RESTARTS:
+            self.gave_up = True
+            note = (f"[supervisor] giving up after {self.MAX_AUTO_RESTARTS} "
+                    f"auto-restarts; /health reports 503; container exits in "
+                    f"{self.GIVE_UP_EXIT_SECS}s unless gateway is revived")
+            self.logs.append(note)
+            print(f"[gw] {note}", flush=True)
+            await asyncio.sleep(self.GIVE_UP_EXIT_SECS)
+            if self.gave_up:
+                # Railway's restartPolicy on_failure triggers on process
+                # exit - this is the platform-level backstop (fresh
+                # container, fresh cgroup, re-runs start.sh).
+                print("[supervisor] exiting container for Railway restart", flush=True)
+                os._exit(1)
+            return
+        self.auto_restarts += 1
+        delay = min(60, 2 ** self.auto_restarts)  # 2,4,8,16,32
+        note = f"[supervisor] auto-restart {self.auto_restarts}/{self.MAX_AUTO_RESTARTS} in {delay}s"
+        self.logs.append(note)
+        print(f"[gw] {note}", flush=True)
+        await asyncio.sleep(delay)
+        if self.state == "error":  # not manually revived in the meantime
+            self.restarts += 1
+            await self.start(supervised=True)
 
     def status(self) -> dict:
         uptime = int(time.time() - self.started_at) if self.started_at and self.state == "running" else None
@@ -327,6 +395,11 @@ async def page_index(request: Request):
 
 
 async def route_health(request: Request):
+    # 503 once the supervisor has exhausted its restart budget - a truthful
+    # health signal instead of the previous always-200. (Railway's on_failure
+    # restart reacts to process exit, which _supervise handles itself.)
+    if gw.gave_up:
+        return JSONResponse({"status": "error", "gateway": gw.state}, status_code=503)
     return JSONResponse({"status": "ok", "gateway": gw.state})
 
 

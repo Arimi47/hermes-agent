@@ -52,7 +52,7 @@ export default function DetailPanel({
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    fetch(`/api/node/${nodeId}`, { cache: 'no-store' })
+    fetch(`/api/node/${nodeId}`, { cache: 'no-store', signal: AbortSignal.timeout(15_000) })
       .then(async (r) => {
         if (!r.ok) throw new Error(`API ${r.status}`);
         return (await r.json()) as NodeDetail;

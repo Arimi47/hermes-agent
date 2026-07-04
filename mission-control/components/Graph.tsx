@@ -74,7 +74,7 @@ export default function Graph() {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch('/api/graph', { cache: 'no-store' });
+        const r = await fetch('/api/graph', { cache: 'no-store', signal: AbortSignal.timeout(30_000) });
         if (!r.ok) throw new Error(`API ${r.status}`);
         const j = (await r.json()) as GraphData;
         if (!cancelled) setData(j);
