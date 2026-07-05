@@ -1,0 +1,4 @@
+# Lokale Artefakte duerfen nie in den Build-Context: node_modules vom
+# Mac enthaelt darwin-Binaries und wuerde den deps-Stage ueberschreiben.
+node_modules
+.next

@@ -1,0 +1,65 @@
+# Hermes-Stack auf dem Hetzner-Server (46.224.223.248).
+# Lebt dort als /opt/hermes/docker-compose.yml (Kopie dieser Datei),
+# daneben: src/ (dieses Repo), data/ (Volumes), .env (Secrets, chmod 600).
+#
+# Muster des Servers: Container binden nur auf 127.0.0.1, der Host-Caddy
+# terminiert TLS:
+#   hermes.birnbaum-group.com  -> 127.0.0.1:8200 (Agent-Admin)
+#   mission.birnbaum-group.com -> 127.0.0.1:8201 (Mission Control)
+#
+# .env-Besonderheiten gegenueber Railway:
+#   NEO4J_URI=bolt://neo4j:7687          (Compose-Netz statt Railway-intern)
+#   HERMES_AGENT_URL=http://hermes-agent:8080
+#   PORT=8080
+#   BACKUP_PASSPHRASE erst ab Cutover setzen (sonst force-pushen Railway
+#   und Hetzner denselben GitHub-Backup-Branch).
+
+services:
+  hermes-agent:
+    build: ./src
+    # restart on-failure ersetzt Railways Backstop: der Gateway-Supervisor
+    # in server.py beendet den Container nach erschoepftem Backoff mit
+    # exit 1 - Docker startet ihn dann frisch (inkl. start.sh-Boots).
+    restart: on-failure:5
+    ports:
+      - "127.0.0.1:8200:8080"
+    env_file: .env
+    volumes:
+      - ./data/hermes:/data
+    depends_on:
+      - neo4j
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    # Kein Host-Port: nur Agent + Mission Control im Compose-Netz
+    # duerfen an die Datenbank. Memory-Werte von Railway uebernommen.
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_server_memory_heap_initial__size: 512M
+      NEO4J_server_memory_heap_max__size: 1024M
+      NEO4J_server_memory_pagecache_size: 512M
+    volumes:
+      - ./data/neo4j:/data
+
+  mission-control:
+    build: ./src/mission-control
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8201:3000"
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      HERMES_AGENT_URL: http://hermes-agent:8080
+      HERMES_ADMIN_USER: ${ADMIN_USERNAME}
+      HERMES_ADMIN_PASS: ${ADMIN_PASSWORD}
+      OBSIDIAN_VAULT_GITHUB_TOKEN: ${OBSIDIAN_VAULT_GITHUB_TOKEN}
+    depends_on:
+      - neo4j
