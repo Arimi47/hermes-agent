@@ -49,14 +49,16 @@ mcp_servers:
   # /data/.hermes/ms365_tokens.json is seeded once per install via
   # scripts/ms365_login.py (device-code flow, locally) and then refreshed
   # silently by MSAL. Gated to Ari by SOUL.md (Vika is explicitly blocked
-  # from MS365 tools). client_secret is intentionally NOT injected: the
-  # public-client device-code flow does not use it.
+  # from MS365 tools). CLIENT_SECRET ist Pflicht: die Azure-App ist
+  # confidential - seit 2026-07 lehnt AAD Refreshes ohne Secret ab
+  # (AADSTS7000218, traf am 2026-07-05 alle drei Mailboxen gleichzeitig).
   ms365:
     command: "python"
     args: ["/app/ms365-mcp/server.py"]
     env:
       MS365_CLIENT_ID: "${MS365_MCP_CLIENT_ID}"
       MS365_TENANT_ID: "${MS365_MCP_TENANT_ID}"
+      MS365_CLIENT_SECRET: "${MS365_MCP_CLIENT_SECRET}"
       HERMES_HOME: "/data/.hermes"
     timeout: 30
     tools:

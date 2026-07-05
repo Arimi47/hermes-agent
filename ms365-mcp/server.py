@@ -24,11 +24,11 @@ from msal import ConfidentialClientApplication, PublicClientApplication, Seriali
 
 CLIENT_ID = os.environ["MS365_CLIENT_ID"]
 TENANT_ID = os.environ["MS365_TENANT_ID"]
-# Optional. In THIS deployment it is intentionally unset (config.seed.yaml
-# injects only CLIENT_ID/TENANT_ID): the app registration is used as a
-# public client with the device-code flow. Set MS365_CLIENT_SECRET only if
-# the Azure registration is switched to Web/confidential - MSAL then wires
-# it into refresh requests automatically.
+# Pflicht in diesem Deployment (config.seed.yaml injiziert es): die
+# Azure-App ist confidential. Seit 2026-07 lehnt AAD Silent-Refreshes
+# ohne Secret ab (AADSTS7000218 'client_assertion or client_secret
+# required') - traf am 2026-07-05 alle drei Mailboxen gleichzeitig.
+# MSAL nutzt das Secret via ConfidentialClientApplication automatisch.
 CLIENT_SECRET = os.environ.get("MS365_CLIENT_SECRET")
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/data/.hermes"))
 

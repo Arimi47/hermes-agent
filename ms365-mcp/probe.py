@@ -26,7 +26,7 @@ from msal import ConfidentialClientApplication, PublicClientApplication, Seriali
 # env mapping. The probe runs from start.sh (Railway env), so accept both.
 CLIENT_ID = os.environ.get("MS365_CLIENT_ID") or os.environ.get("MS365_MCP_CLIENT_ID")
 TENANT_ID = os.environ.get("MS365_TENANT_ID") or os.environ.get("MS365_MCP_TENANT_ID")
-CLIENT_SECRET = os.environ.get("MS365_CLIENT_SECRET")
+CLIENT_SECRET = os.environ.get("MS365_CLIENT_SECRET") or os.environ.get("MS365_MCP_CLIENT_SECRET")
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/data/.hermes"))
 STATUS_FILE = HERMES_HOME / "ms365-probe-status.json"
 
