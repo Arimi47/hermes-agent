@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mfiles-cli"
+version = "0.1.0"
+description = "Token-efficient CLI for Birnbaum M-Files workflows"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27.0",
+    "PyPDF2>=3.0.0",
+    "openpyxl>=3.1.0",
+]
+
+[project.optional-dependencies]
+msg = ["extract-msg>=0.48.0"]
+
+[project.scripts]
+mfiles = "mfiles_cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mfiles_cli*"]
